@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Users collection - users can read/write their own profile
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Coaches collection - authenticated users can read all coaches
+    // Only authenticated users can create/update their own coach profile
+    match /coaches/{coachId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.email == request.auth.token.email;
+      allow update, delete: if request.auth != null && resource.data.email == request.auth.token.email;
+    }
+    
+    // Workouts collection - users can read/write their own workouts
+    match /workouts/{workoutId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+    
+    // AI workouts collection - users can read/write their own AI-generated workouts
+    match /ai_workouts/{workoutId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+    
+    // Bookings collection - users can manage their bookings, coaches can read bookings for them
+    match /bookings/{bookingId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && 
+                            (resource.data.userId == request.auth.uid || 
+                             resource.data.coachEmail == request.auth.token.email);
+    }
+    
+    // Notifications collection - users can create, coaches can read/update their notifications
+    match /notifications/{notificationId} {
+      allow read: if request.auth != null && resource.data.recipientEmail == request.auth.token.email;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && resource.data.recipientEmail == request.auth.token.email;
+      allow delete: if request.auth != null && resource.data.recipientEmail == request.auth.token.email;
+    }
+  }
+}
