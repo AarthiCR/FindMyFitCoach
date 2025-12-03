@@ -40,7 +40,10 @@ const db = getFirestore(app);
 const aiService = new AIService(openaiApiKey);
 
 // UI elements
+const userMenu = document.getElementById("user-menu");
 const userDisplayEl = document.getElementById("user-display");
+const userDisplayName = document.getElementById("user-display-name");
+const userDropdown = document.getElementById("user-dropdown");
 const btnSignIn = document.getElementById("btn-sign-in");
 const btnSignOut = document.getElementById("btn-sign-out");
 const gateEl = document.getElementById("auth-gate");
@@ -80,6 +83,10 @@ const bookingEmpty = document.getElementById("booking-empty");
 const refreshBookings = document.getElementById("refresh-bookings");
 
 // Coach elements
+const coachMenu = document.getElementById("coach-menu");
+const coachDisplayEl = document.getElementById("coach-display");
+const coachDisplayName = document.getElementById("coach-display-name");
+const coachDropdown = document.getElementById("coach-dropdown");
 const coachProfileSetup = document.getElementById("coach-profile-setup");
 const coachDashboard = document.getElementById("coach-dashboard");
 const coachProfileForm = document.getElementById("coach-profile-form");
@@ -151,14 +158,14 @@ function toggleAuthUI(user) {
         coachAppEl.classList.add("hidden");
         btnSignIn.classList.remove("hidden");
         btnSignOut.classList.add("hidden");
-        userDisplayEl.classList.add("hidden");
-        userDisplayEl.textContent = "";
+        userMenu.classList.add("hidden");
+        userDisplayName.textContent = "";
     } else {
         gateEl.classList.add("hidden");
         btnSignIn.classList.add("hidden");
         btnSignOut.classList.remove("hidden");
-        userDisplayEl.classList.remove("hidden");
-        userDisplayEl.textContent = `${user.displayName ?? user.email}`;
+        userMenu.classList.remove("hidden");
+        userDisplayName.textContent = `${user.displayName ?? user.email}`;
         
         // Show appropriate view based on user type
         if (userType === 'coach') {
@@ -174,6 +181,7 @@ function toggleAuthUI(user) {
 async function loadUserProfile(userId) {
     const userRef = doc(db, "users", userId);
     const snap = await getDoc(userRef);
+    
     if (snap.exists()) {
         const data = snap.data();
         heightEl.value = data.heightCm ?? "";
@@ -183,25 +191,24 @@ async function loadUserProfile(userId) {
         
         // Check if profile is complete
         isProfileComplete = !!(data.heightCm && data.weightKg && data.goal);
-        
-        if (isProfileComplete) {
-            // Hide profile section and show edit button
-            profileSection.classList.add("hidden");
-            mainContent.classList.remove("hidden");
-            editProfileBtn.classList.remove("hidden");
-            editProfileBtn.classList.add("flex");
-        } else {
-            // Show profile section for first-time users
-            profileSection.classList.remove("hidden");
-            mainContent.classList.add("hidden");
-            editProfileBtn.classList.add("hidden");
-        }
     } else {
-        // New user - show profile section
+        // New user - no profile data yet, clear form fields
+        heightEl.value = "";
+        weightEl.value = "";
+        goalEl.value = "";
+        requirementsEl.value = "";
+        isProfileComplete = false;
+    }
+    
+    // Update UI based on profile completion status
+    if (isProfileComplete) {
+        // Hide profile section and show main content
+        profileSection.classList.add("hidden");
+        mainContent.classList.remove("hidden");
+    } else {
+        // Show profile section for first-time or incomplete users
         profileSection.classList.remove("hidden");
         mainContent.classList.add("hidden");
-        editProfileBtn.classList.add("hidden");
-        isProfileComplete = false;
     }
 }
 
@@ -214,19 +221,31 @@ async function loadCoachProfile(userEmail) {
     );
     const snap = await getDocs(q);
     
-    if (snap.empty) {
-        // First time coach - show profile setup
-        coachProfileSetup.classList.remove("hidden");
-        coachDashboard.classList.add("hidden");
-        coachNameEl.value = "";
-        coachBioEl.value = "";
-        coachExperienceEl.value = "";
-        coachRateEl.value = "";
-        return null;
-    } else {
-        // Existing coach - show dashboard
+    const hasProfile = !snap.empty;
+    
+    if (hasProfile) {
+        // Existing coach - load data and show dashboard
         const coachDoc = snap.docs[0];
+        const coachData = coachDoc.data();
         currentCoachId = coachDoc.id;
+        
+        // Populate form fields for editing
+        coachNameEl.value = coachData.name || "";
+        coachBioEl.value = coachData.bio || "";
+        coachExperienceEl.value = coachData.yearsExperience || "";
+        coachRateEl.value = coachData.hourlyRate || "";
+        
+        // Check specializations
+        document.querySelectorAll('input[name="specialization"]').forEach(checkbox => {
+            checkbox.checked = coachData.specializations?.includes(checkbox.value) || false;
+        });
+        
+        // Set coach display name in dropdown
+        if (coachDisplayName) {
+            coachDisplayName.textContent = coachData.name || userEmail;
+        }
+        
+        // Show dashboard, hide setup
         coachProfileSetup.classList.add("hidden");
         coachDashboard.classList.remove("hidden");
         
@@ -234,6 +253,17 @@ async function loadCoachProfile(userEmail) {
         listenForNotifications(userEmail);
         
         return coachDoc.id;
+    } else {
+        // First time coach - show profile setup
+        coachNameEl.value = "";
+        coachBioEl.value = "";
+        coachExperienceEl.value = "";
+        coachRateEl.value = "";
+        document.querySelectorAll('input[name="specialization"]').forEach(cb => cb.checked = false);
+        
+        coachProfileSetup.classList.remove("hidden");
+        coachDashboard.classList.add("hidden");
+        return null;
     }
 }
 
@@ -1270,6 +1300,15 @@ btnSignOut.addEventListener("click", async () => {
     userType = null;
 });
 
+// Coach sign out button (in dropdown)
+const btnCoachSignOut = document.getElementById("btn-coach-sign-out");
+btnCoachSignOut?.addEventListener("click", async () => {
+    await signOut(auth);
+    // Clear userType on sign out
+    localStorage.removeItem('userType');
+    userType = null;
+});
+
 // Profile form submit
 profileForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1284,8 +1323,6 @@ profileForm.addEventListener("submit", async (e) => {
         isProfileComplete = true;
         profileSection.classList.add("hidden");
         mainContent.classList.remove("hidden");
-        editProfileBtn.classList.remove("hidden");
-        editProfileBtn.classList.add("flex");
         
         // Load all coaches when profile is saved
         await Promise.all([
@@ -1302,9 +1339,15 @@ profileForm.addEventListener("submit", async (e) => {
 
 // Edit profile button
 editProfileBtn.addEventListener("click", () => {
+    userDropdown.classList.add("hidden"); // Close dropdown
     profileSection.classList.remove("hidden");
     mainContent.classList.add("hidden");
     cancelEditProfileBtn.classList.remove("hidden");
+    // Show delete button when editing existing profile
+    const deleteBtn = document.getElementById("delete-profile-btn");
+    if (deleteBtn && isProfileComplete) {
+        deleteBtn.classList.remove("hidden");
+    }
 });
 
 // Cancel edit profile
@@ -1312,6 +1355,145 @@ cancelEditProfileBtn.addEventListener("click", () => {
     profileSection.classList.add("hidden");
     mainContent.classList.remove("hidden");
     cancelEditProfileBtn.classList.add("hidden");
+    // Hide delete button when canceling edit
+    const deleteBtn = document.getElementById("delete-profile-btn");
+    if (deleteBtn) deleteBtn.classList.add("hidden");
+});
+
+// Delete profile button
+const deleteProfileBtn = document.getElementById("delete-profile-btn");
+deleteProfileBtn?.addEventListener("click", async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    
+    const confirmMessage = "⚠️ Are you sure you want to delete your profile?\n\nThis will permanently remove:\n• Your profile information\n• All your bookings\n• Your workout history\n\nThis action cannot be undone.";
+    
+    if (!confirm(confirmMessage)) return;
+    
+    // Final confirmation
+    const finalConfirm = prompt("Type 'DELETE' to confirm profile deletion:");
+    if (finalConfirm !== 'DELETE') {
+        alert('Profile deletion cancelled.');
+        return;
+    }
+    
+    deleteProfileBtn.disabled = true;
+    deleteProfileBtn.textContent = 'Deleting...';
+    
+    try {
+        // Delete all user data
+        const userRef = doc(db, "users", user.uid);
+        
+        // Delete user bookings
+        const bookingsQuery = query(
+            collection(db, "bookings"),
+            where("userId", "==", user.uid)
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const deleteBookingPromises = bookingsSnap.docs.map(doc => deleteDoc(doc.ref));
+        
+        // Delete AI workouts
+        const workoutsQuery = query(
+            collection(db, "ai_workouts"),
+            where("userId", "==", user.uid)
+        );
+        const workoutsSnap = await getDocs(workoutsQuery);
+        const deleteWorkoutPromises = workoutsSnap.docs.map(doc => deleteDoc(doc.ref));
+        
+        // Wait for all deletions
+        await Promise.all([...deleteBookingPromises, ...deleteWorkoutPromises]);
+        
+        // Delete user profile
+        await deleteDoc(userRef);
+        
+        // Reset button state before sign out
+        deleteProfileBtn.disabled = false;
+        deleteProfileBtn.textContent = '🗑️ Delete Profile';
+        
+        // Sign out and show goodbye message
+        alert('😢 Sorry to see you go!\n\nYour profile and data have been permanently deleted.\n\nWe hope to see you again in the future. Stay healthy!');
+        
+        await signOut(auth);
+        
+    } catch (error) {
+        console.error('Failed to delete profile:', error);
+        alert('Failed to delete profile: ' + error.message);
+        deleteProfileBtn.disabled = false;
+        deleteProfileBtn.textContent = '🗑️ Delete Profile';
+    }
+});
+
+// Coach profile - Edit button
+const editCoachProfileBtn = document.getElementById("edit-coach-profile-btn");
+editCoachProfileBtn?.addEventListener("click", () => {
+    coachDropdown.classList.add("hidden"); // Close dropdown
+    coachDashboard.classList.add("hidden");
+    coachProfileSetup.classList.remove("hidden");
+    // Show delete button when editing
+    const deleteBtn = document.getElementById("delete-coach-profile-btn");
+    if (deleteBtn) deleteBtn.classList.remove("hidden");
+});
+
+// Coach profile - Delete button
+const deleteCoachProfileBtn = document.getElementById("delete-coach-profile-btn");
+deleteCoachProfileBtn?.addEventListener("click", async () => {
+    const user = auth.currentUser;
+    if (!user || !currentCoachId) return;
+    
+    const confirmMessage = "⚠️ Are you sure you want to delete your coach profile?\n\nThis will permanently remove:\n• Your coach profile\n• All your booking history\n• Your availability and settings\n\nThis action cannot be undone.";
+    
+    if (!confirm(confirmMessage)) return;
+    
+    // Final confirmation
+    const finalConfirm = prompt("Type 'DELETE' to confirm coach profile deletion:");
+    if (finalConfirm !== 'DELETE') {
+        alert('Coach profile deletion cancelled.');
+        return;
+    }
+    
+    deleteCoachProfileBtn.disabled = true;
+    deleteCoachProfileBtn.textContent = 'Deleting...';
+    
+    try {
+        // Delete coach bookings
+        const bookingsQuery = query(
+            collection(db, "bookings"),
+            where("coachId", "==", currentCoachId)
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const deleteBookingPromises = bookingsSnap.docs.map(doc => deleteDoc(doc.ref));
+        
+        // Delete notifications for this coach
+        const notificationsQuery = query(
+            collection(db, "notifications"),
+            where("recipientEmail", "==", user.email)
+        );
+        const notificationsSnap = await getDocs(notificationsQuery);
+        const deleteNotificationPromises = notificationsSnap.docs.map(doc => deleteDoc(doc.ref));
+        
+        // Wait for all deletions
+        await Promise.all([...deleteBookingPromises, ...deleteNotificationPromises]);
+        
+        // Delete coach profile
+        const coachRef = doc(db, "coaches", currentCoachId);
+        await deleteDoc(coachRef);
+        
+        // Reset button state before sign out
+        deleteCoachProfileBtn.disabled = false;
+        deleteCoachProfileBtn.textContent = '🗑️ Delete Coach Profile';
+        
+        // Sign out and show goodbye message
+        alert('😢 Sorry to see you go!\n\nYour coach profile and data have been permanently deleted.\n\nWe hope to see you again in the future. Keep inspiring others to stay fit!');
+        
+        currentCoachId = null;
+        await signOut(auth);
+        
+    } catch (error) {
+        console.error('Failed to delete coach profile:', error);
+        alert('Failed to delete coach profile: ' + error.message);
+        deleteCoachProfileBtn.disabled = false;
+        deleteCoachProfileBtn.textContent = '🗑️ Delete Coach Profile';
+    }
 });
 
 // Coach profile form submit
@@ -1518,6 +1700,34 @@ function renderAIWorkout(workout) {
         </div>
     `;
 }
+
+// Dropdown menu toggles
+userDisplayEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    userDropdown.classList.toggle("hidden");
+    coachDropdown?.classList.add("hidden"); // Close coach dropdown if open
+});
+
+coachDisplayEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    coachDropdown.classList.toggle("hidden");
+    userDropdown?.classList.add("hidden"); // Close user dropdown if open
+});
+
+// Close dropdowns when clicking outside
+document.addEventListener("click", () => {
+    userDropdown?.classList.add("hidden");
+    coachDropdown?.classList.add("hidden");
+});
+
+// Prevent dropdown from closing when clicking inside
+userDropdown?.addEventListener("click", (e) => {
+    e.stopPropagation();
+});
+
+coachDropdown?.addEventListener("click", (e) => {
+    e.stopPropagation();
+});
 
 // Auth state changes
 onAuthStateChanged(auth, async (user) => {
