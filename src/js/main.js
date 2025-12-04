@@ -135,12 +135,19 @@ const closeVideoCallBtn = document.getElementById("close-video-call");
 const jitsiContainer = document.getElementById("jitsi-container");
 const userProfilePanel = document.getElementById("user-profile-panel");
 const userWorkoutPanel = document.getElementById("user-workout-panel");
+const sessionNotesTextarea = document.getElementById("session-notes");
+const saveSessionNotesBtn = document.getElementById("save-session-notes");
+const notesStatus = document.getElementById("notes-status");
 let jitsiApi = null;
 let currentCallBookingId = null;
 let callStarted = false; // Track if the call has actually started
 let participantCount = 0; // Track number of participants
 let currentSessionUserId = null; // Track the user in current session
 let workoutChecklist = []; // Track workout items for the session
+
+// User workout summaries elements (for user's view in video session)
+const userPastSummariesList = document.getElementById("user-past-summaries-list");
+const userSummariesEmpty = document.getElementById("user-summaries-empty");
 
 function openBookingModal(coach, goal) {
     pendingBookingCoach = coach;
@@ -338,14 +345,20 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
 async function handleVideoCallEnd() {
     if (currentCallBookingId) {
         try {
-            // Save workout checklist if coach
-            if (userType === 'coach' && workoutChecklist.length > 0) {
-                await saveWorkoutSession(currentCallBookingId, currentSessionUserId, workoutChecklist);
-            }
+            // Don't auto-save workout session - let coach add notes manually
+            // The coach can use the "Save Session Summary" button to save with notes
             
             // Automatically mark session as completed
             await endSession(currentCallBookingId);
             console.log('Session automatically ended:', currentCallBookingId);
+            
+            // Remind coach to save notes if they haven't
+            if (userType === 'coach' && workoutChecklist.length > 0) {
+                const hasNotes = sessionNotesTextarea?.value.trim();
+                if (!hasNotes) {
+                    console.log('💡 Reminder: Add session notes before closing');
+                }
+            }
         } catch (e) {
             console.error('Failed to auto-end session:', e);
         }
@@ -415,7 +428,13 @@ async function loadUserProfileForSession(bookingId) {
             const userData = userSnap.data();
             
             // Populate profile summary
-            document.getElementById('profile-name').textContent = userData.name || booking.userName || 'User';
+            const profileNameEl = document.getElementById('profile-name');
+            const userName = userData.name || booking.userName || 'User';
+            profileNameEl.textContent = userName;
+            
+            // Setup hover tooltip for past sessions
+            setupUserNameTooltip(profileNameEl, booking.userId, currentCoachId);
+            
             document.getElementById('profile-goal').textContent = userData.goal || booking.goal || '-';
             document.getElementById('profile-height').textContent = userData.heightCm ? `${userData.heightCm} cm` : '-';
             document.getElementById('profile-weight').textContent = userData.weightKg ? `${userData.weightKg} kg` : '-';
@@ -430,6 +449,106 @@ async function loadUserProfileForSession(bookingId) {
     } catch (error) {
         console.error('Error loading user profile for session:', error);
     }
+}
+
+// Setup hover tooltip for user name showing past summaries
+function setupUserNameTooltip(nameElement, userId, coachId) {
+    const tooltip = document.getElementById('profile-name-tooltip');
+    const tooltipContent = document.getElementById('tooltip-summaries-content');
+    
+    if (!tooltip || !tooltipContent) return;
+    
+    let isHovering = false;
+    let summariesLoaded = false;
+    let loadTimeout = null;
+    
+    // Show tooltip on hover
+    nameElement.addEventListener('mouseenter', async () => {
+        isHovering = true;
+        
+        // Delay loading to avoid unnecessary queries on quick hovers
+        loadTimeout = setTimeout(async () => {
+            if (!isHovering) return;
+            
+            tooltip.classList.remove('hidden');
+            
+            // Load summaries only once
+            if (!summariesLoaded) {
+                tooltipContent.innerHTML = '<p class="text-gray-400 italic text-xs">Loading...</p>';
+                
+                try {
+                    const q = query(
+                        collection(db, "workoutSessions"),
+                        where("userId", "==", userId),
+                        where("coachId", "==", coachId),
+                        orderBy("completedAt", "desc"),
+                        limit(5)
+                    );
+                    
+                    const snapshot = await getDocs(q);
+                    
+                    if (snapshot.empty) {
+                        tooltipContent.innerHTML = '<p class="text-gray-400 italic text-xs">No past sessions with this user</p>';
+                    } else {
+                        tooltipContent.innerHTML = '';
+                        
+                        snapshot.docs.forEach(doc => {
+                            const session = doc.data();
+                            const date = session.completedAt?.toDate?.() || new Date();
+                            const completionRate = Math.round((session.completedItems / session.totalItems) * 100);
+                            
+                            const miniCard = document.createElement('div');
+                            miniCard.className = 'bg-gray-900/70 rounded p-2 border border-gray-700/50 mb-2';
+                            miniCard.innerHTML = `
+                                <div class="flex justify-between items-start mb-1">
+                                    <span class="text-white font-medium text-xs">${date.toLocaleDateString()}</span>
+                                    <span class="text-xs ${
+                                        completionRate >= 80 ? 'text-green-400' : 
+                                        completionRate >= 50 ? 'text-yellow-400' : 'text-red-400'
+                                    }">${completionRate}%</span>
+                                </div>
+                                <p class="text-gray-400 text-xs mb-1">${session.goal || 'General Fitness'}</p>
+                                ${session.coachNotes ? `
+                                    <div class="bg-yellow-900/20 border border-yellow-700/30 rounded p-1 mt-1">
+                                        <p class="text-yellow-300 text-xs line-clamp-2">${session.coachNotes}</p>
+                                    </div>
+                                ` : ''}
+                            `;
+                            tooltipContent.appendChild(miniCard);
+                        });
+                        
+                        summariesLoaded = true;
+                    }
+                } catch (error) {
+                    console.error('Error loading tooltip summaries:', error);
+                    tooltipContent.innerHTML = '<p class="text-red-400 text-xs">Error loading summaries</p>';
+                }
+            }
+        }, 300); // 300ms delay before showing
+    });
+    
+    // Hide tooltip on mouse leave
+    nameElement.addEventListener('mouseleave', () => {
+        isHovering = false;
+        clearTimeout(loadTimeout);
+        
+        // Small delay before hiding to allow moving to tooltip
+        setTimeout(() => {
+            if (!isHovering) {
+                tooltip.classList.add('hidden');
+            }
+        }, 200);
+    });
+    
+    // Keep tooltip visible when hovering over it
+    tooltip.addEventListener('mouseenter', () => {
+        isHovering = true;
+    });
+    
+    tooltip.addEventListener('mouseleave', () => {
+        isHovering = false;
+        tooltip.classList.add('hidden');
+    });
 }
 
 // Load past workout sessions for the user
@@ -497,20 +616,30 @@ async function loadPastWorkouts(userId) {
             sessions.push({ id: doc.id, ...doc.data() });
         });
         
-        console.log('✅ Rendering', sessions.length, 'past sessions');
+        console.log('✅ Rendering', sessions.length, 'detailed past sessions');
         
+        // Display detailed summary cards with coach notes
         sessions.forEach(session => {
-            const date = session.completedAt?.toDate?.() || session.endedAt?.toDate?.() || session.createdAt?.toDate?.() || new Date();
-            const div = document.createElement('div');
-            div.className = 'bg-gray-900/50 rounded p-2 border border-gray-700/30';
-            div.innerHTML = `
-                <div class="flex justify-between items-start mb-1">
-                    <span class="text-white font-medium text-xs">${date.toLocaleDateString()}</span>
-                    <span class="text-emerald-400 text-xs">${session.completedItems ? session.completedItems + ' items' : 'Completed'}</span>
-                </div>
-                <p class="text-gray-400 text-xs">${session.coachName || 'Coach'} - ${session.goal || 'Session'}</p>
-            `;
-            pastWorkoutsList.appendChild(div);
+            // Only show if it has exercise data (from workoutSessions collection)
+            if (session.allExercises && session.totalItems) {
+                const card = createSummaryCard(session);
+                // Adjust styling for the side panel
+                card.className = 'bg-gray-900/50 rounded-lg p-3 border border-gray-700/50 hover:border-blue-600/50 transition-colors';
+                pastWorkoutsList.appendChild(card);
+            } else {
+                // Fallback for old bookings without detailed data
+                const date = session.completedAt?.toDate?.() || session.endedAt?.toDate?.() || session.createdAt?.toDate?.() || new Date();
+                const div = document.createElement('div');
+                div.className = 'bg-gray-900/50 rounded p-2 border border-gray-700/30';
+                div.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="text-white font-medium text-xs">${date.toLocaleDateString()}</span>
+                        <span class="text-emerald-400 text-xs">Completed</span>
+                    </div>
+                    <p class="text-gray-400 text-xs">${session.goal || 'Session'}</p>
+                `;
+                pastWorkoutsList.appendChild(div);
+            }
         });
         
         console.log('✅ Past sessions rendered successfully');
@@ -719,6 +848,12 @@ async function loadUserWorkoutForSession(bookingId) {
         console.log('📋 Workout checklist created:', workoutChecklist);
         console.log('Calling renderUserWorkoutChecklist...');
         renderUserWorkoutChecklist();
+        
+        // Load past workout summaries with this coach
+        if (booking.coachId) {
+            console.log('📊 Loading past workout summaries with coach:', booking.coachId);
+            await fetchUserWorkoutSummaries(currentUserId, booking.coachId);
+        }
         
         // Setup real-time listener for coach updates
         setupWorkoutProgressListener(bookingId);
@@ -931,37 +1066,198 @@ function createConfetti() {
     }
 }
 
-async function saveWorkoutSession(bookingId, userId, checklist) {
+async function saveWorkoutSession(bookingId, userId, checklist, coachNotes = '') {
     try {
         const completedItems = checklist.filter(item => item.completed);
         
         if (completedItems.length === 0) {
             console.log('No items completed, skipping save');
-            return;
+            return null;
         }
         
         const bookingRef = doc(db, "bookings", bookingId);
         const bookingSnap = await getDoc(bookingRef);
         const booking = bookingSnap.data();
         
-        await addDoc(collection(db, "workoutSessions"), {
+        const sessionData = {
             userId: userId,
             bookingId: bookingId,
             coachId: currentCoachId,
             coachName: booking.coachName || 'Coach',
             userName: booking.userName || 'User',
+            userEmail: booking.userEmail || '',
             goal: booking.goal,
             completedItems: completedItems.length,
             totalItems: checklist.length,
             exercises: completedItems.map(item => item.exercise),
             allExercises: checklist.map(item => ({ exercise: item.exercise, completed: item.completed })),
+            coachNotes: coachNotes,
             completedAt: serverTimestamp(),
             createdAt: serverTimestamp()
-        });
+        };
         
-        console.log('Workout session saved successfully');
+        const docRef = await addDoc(collection(db, "workoutSessions"), sessionData);
+        console.log('Workout session saved successfully with ID:', docRef.id);
+        return docRef.id;
     } catch (error) {
         console.error('Error saving workout session:', error);
+        return null;
+    }
+}
+
+// Save session notes separately (can be called independently)
+async function saveSessionNotes(bookingId, userId, checklist) {
+    const notes = sessionNotesTextarea?.value.trim() || '';
+    
+    if (!notes && checklist.filter(item => item.completed).length === 0) {
+        alert('Please add session notes or complete at least one exercise before saving.');
+        return;
+    }
+    
+    if (!saveSessionNotesBtn) return;
+    
+    saveSessionNotesBtn.disabled = true;
+    notesStatus.textContent = 'Saving...';
+    notesStatus.classList.remove('hidden', 'text-red-400', 'text-green-400');
+    notesStatus.classList.add('text-yellow-400');
+    
+    try {
+        const sessionId = await saveWorkoutSession(bookingId, userId, checklist, notes);
+        
+        if (sessionId) {
+            notesStatus.textContent = '✅ Session summary saved successfully!';
+            notesStatus.classList.remove('text-yellow-400');
+            notesStatus.classList.add('text-green-400');
+            
+            // Clear the notes
+            if (sessionNotesTextarea) sessionNotesTextarea.value = '';
+            
+            setTimeout(() => {
+                notesStatus.classList.add('hidden');
+            }, 3000);
+        } else {
+            throw new Error('Failed to save session');
+        }
+    } catch (error) {
+        console.error('Error saving session notes:', error);
+        notesStatus.textContent = '❌ Failed to save. Please try again.';
+        notesStatus.classList.remove('text-yellow-400');
+        notesStatus.classList.add('text-red-400');
+    } finally {
+        saveSessionNotesBtn.disabled = false;
+    }
+}
+
+// Note: fetchWorkoutSummaries and renderWorkoutSummaries removed
+// Summaries now shown in video session "Past Sessions" panel using createSummaryCard
+
+// Create a summary card element (shared between coach and user views)
+function createSummaryCard(summary) {
+    const card = document.createElement('div');
+    card.className = 'bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700/50 hover:border-blue-300 dark:hover:border-blue-600/50 transition-colors';
+    
+    const date = summary.completedAt?.toDate?.() || new Date();
+    const completionRate = Math.round((summary.completedItems / summary.totalItems) * 100);
+    
+    card.innerHTML = `
+            <div class="flex items-start justify-between mb-2">
+                <div class="flex-1">
+                    <h4 class="font-semibold text-gray-900 dark:text-white text-sm">${summary.userName}</h4>
+                    <p class="text-xs text-gray-600 dark:text-gray-400">${summary.userEmail || ''}</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-gray-500 dark:text-gray-400">${date.toLocaleDateString()}</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">${date.toLocaleTimeString()}</p>
+                </div>
+            </div>
+            
+            <div class="mb-2">
+                <span class="inline-block px-2 py-1 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                    ${summary.goal || 'General Fitness'}
+                </span>
+            </div>
+            
+            <div class="mb-3">
+                <div class="flex items-center justify-between text-xs mb-1">
+                    <span class="text-gray-600 dark:text-gray-400">Completion</span>
+                    <span class="font-semibold ${completionRate >= 80 ? 'text-green-600 dark:text-green-400' : completionRate >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}">
+                        ${summary.completedItems}/${summary.totalItems} (${completionRate}%)
+                    </span>
+                </div>
+                <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div class="h-2 rounded-full transition-all ${completionRate >= 80 ? 'bg-green-500' : completionRate >= 50 ? 'bg-yellow-500' : 'bg-red-500'}" 
+                         style="width: ${completionRate}%"></div>
+                </div>
+            </div>
+            
+            ${summary.coachNotes ? `
+                <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700/50 rounded p-3 mb-3">
+                    <p class="text-xs font-semibold text-yellow-800 dark:text-yellow-300 mb-1 flex items-center gap-1">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        </svg>
+                        Coach Notes:
+                    </p>
+                    <p class="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap">${summary.coachNotes}</p>
+                </div>
+            ` : ''}
+            
+            <details class="mt-2">
+                <summary class="cursor-pointer text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium">
+                    View Exercises (${summary.completedItems} completed)
+                </summary>
+                <ul class="mt-2 space-y-1 pl-4">
+                    ${summary.allExercises.map(ex => `
+                        <li class="text-xs ${ex.completed ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400 line-through'}">
+                            ${ex.completed ? '✓' : '○'} ${ex.exercise}
+                        </li>
+                    `).join('')}
+                </ul>
+            </details>
+    `;
+    
+    return card;
+}
+
+// Fetch and display workout summaries for a specific user with current coach
+async function fetchUserWorkoutSummaries(userId, coachId) {
+    if (!userId || !coachId || !userPastSummariesList) {
+        return;
+    }
+    
+    try {
+        console.log('📊 Fetching workout summaries for user:', userId, 'with coach:', coachId);
+        
+        const q = query(
+            collection(db, "workoutSessions"),
+            where("userId", "==", userId),
+            where("coachId", "==", coachId),
+            orderBy("completedAt", "desc"),
+            limit(10)
+        );
+        
+        const snapshot = await getDocs(q);
+        
+        if (snapshot.empty) {
+            userPastSummariesList.innerHTML = '';
+            userSummariesEmpty.classList.remove('hidden');
+            return;
+        }
+        
+        userSummariesEmpty.classList.add('hidden');
+        userPastSummariesList.innerHTML = '';
+        
+        snapshot.docs.forEach(doc => {
+            const summary = { id: doc.id, ...doc.data() };
+            const card = createSummaryCard(summary);
+            userPastSummariesList.appendChild(card);
+        });
+        
+        console.log('✅ Loaded', snapshot.size, 'past sessions for user');
+        
+    } catch (error) {
+        console.error('❌ Error fetching user workout summaries:', error);
+        userPastSummariesList.innerHTML = '<p class="text-red-400 text-sm">Error loading past sessions. Check console.</p>';
     }
 }
 
@@ -2464,6 +2760,15 @@ refreshBookings.addEventListener("click", async () => {
 
 coachRefreshBookings.addEventListener("click", async () => {
     await fetchCoachBookings();
+});
+
+// Save session notes button
+saveSessionNotesBtn?.addEventListener("click", async () => {
+    if (currentCallBookingId && currentSessionUserId && workoutChecklist.length > 0) {
+        await saveSessionNotes(currentCallBookingId, currentSessionUserId, workoutChecklist);
+    } else {
+        alert('No active session to save notes for.');
+    }
 });
 
 // AI Workout Generation

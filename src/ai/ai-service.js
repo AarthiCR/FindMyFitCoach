@@ -189,7 +189,7 @@ Return ONLY valid JSON, no markdown.`;
     /**
      * Call OpenAI GPT API
      */
-    async _callOpenAI(prompt) {
+    async _callOpenAI(prompt, model = null, temperature = 0.7, maxTokens = 2048) {
         const response = await fetch(this.apiEndpoint, {
             method: 'POST',
             headers: {
@@ -197,7 +197,7 @@ Return ONLY valid JSON, no markdown.`;
                 'Authorization': `Bearer ${this.apiKey}`
             },
             body: JSON.stringify({
-                model: this.model,
+                model: model || this.model,
                 messages: [
                     {
                         role: 'system',
@@ -208,8 +208,8 @@ Return ONLY valid JSON, no markdown.`;
                         content: prompt
                     }
                 ],
-                temperature: 0.7,
-                max_tokens: 2048,
+                temperature: temperature,
+                max_tokens: maxTokens,
                 response_format: { type: "json_object" }
             })
         });
@@ -294,17 +294,42 @@ Return ONLY valid JSON, no markdown.`;
      * Generate workout plan as a simple array of exercise strings
      */
     async generateWorkoutPlan(userProfile, customPrompt = null) {
-        const prompt = customPrompt || `Generate a focused workout plan for ${userProfile.goal || 'general fitness'}. 
-User: ${userProfile.heightCm}cm, ${userProfile.weightKg}kg. 
-Requirements: ${userProfile.requirements || 'None'}.
+        // Add variation factors to ensure different workouts each time
+        const dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][new Date().getDay()];
+        const sessionTime = new Date().getHours();
+        const timeOfDay = sessionTime < 12 ? 'morning' : sessionTime < 17 ? 'afternoon' : 'evening';
+        const variationSeed = Math.floor(Math.random() * 1000);
+        
+        const prompt = customPrompt || `Generate a UNIQUE and VARIED workout plan for a ${timeOfDay} ${dayOfWeek} session.
 
-Return exactly 5-7 exercises as a simple JSON array of strings. Each string should be a complete exercise description with reps/duration.
-Example: ["Warm-up: 5 min jogging", "Push-ups: 3 sets of 12 reps", "Squats: 3 sets of 15 reps"]
+User Profile:
+- Height: ${userProfile.heightCm || 170}cm
+- Weight: ${userProfile.weightKg || 70}kg
+- Primary Goal: ${userProfile.goal || 'general fitness'}
+- Requirements/Constraints: ${userProfile.requirements || 'None'}
+- Fitness Level: ${this._calculateFitnessLevel(userProfile)}
 
-Return ONLY the JSON array, no other text or markdown.`;
+IMPORTANT INSTRUCTIONS:
+1. Create a DIFFERENT workout than usual - vary exercises, order, intensity, and rep schemes
+2. Consider the time of day (${timeOfDay}) and day of week (${dayOfWeek}) for energy levels
+3. Include ${5 + Math.floor(Math.random() * 3)} exercises (5-7 total)
+4. Mix different muscle groups and training styles
+5. Be creative with exercise variations and combinations
+6. Variation seed: ${variationSeed} (use this to ensure uniqueness)
+
+Return exactly 5-7 exercises as a JSON array of strings. Each string should be a complete, actionable exercise description with sets/reps/duration.
+
+Examples:
+- "Warm-up: Dynamic leg swings and arm circles (3 minutes)"
+- "Decline push-ups: 4 sets of 8-10 reps with 60s rest"
+- "Bulgarian split squats: 3 sets of 12 reps per leg"
+- "Plank to downward dog flow: 3 rounds of 45 seconds"
+
+Return ONLY a JSON array of strings, no other text or markdown.
+Make this workout DIFFERENT and FRESH!`;
 
         try {
-            const response = await this._callOpenAI(prompt, 'gpt-4o-mini', 0.7, 300);
+            const response = await this._callOpenAI(prompt, 'gpt-4o-mini', 0.9, 400);
             const cleanJson = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleanJson);
             return Array.isArray(parsed) ? parsed : [];

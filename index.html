@@ -82,6 +82,13 @@
             background: rgba(16, 185, 129, 0.5);
             border-radius: 2px;
         }
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            line-clamp: 2;
+            overflow: hidden;
+        }
     </style>
     <meta name="color-scheme" content="light dark">
 </head>
@@ -472,7 +479,19 @@
                             User Profile
                         </h3>
                         <div id="session-user-profile" class="space-y-2 text-sm">
-                            <div class="flex justify-between"><span class="text-gray-400">Name:</span><span id="profile-name" class="text-white font-medium">-</span></div>
+                            <div class="flex justify-between relative">
+                                <span class="text-gray-400">Name:</span>
+                                <span id="profile-name" class="text-white font-medium cursor-pointer hover:text-blue-400 transition-colors relative" title="Hover to see past sessions">
+                                    -
+                                    <!-- Tooltip for past summaries -->
+                                    <div id="profile-name-tooltip" class="hidden absolute left-0 top-full mt-2 w-80 max-h-96 overflow-y-auto bg-gray-950 border border-blue-500/30 rounded-lg shadow-2xl z-50 p-3">
+                                        <div class="text-xs text-gray-300 font-normal space-y-2">
+                                            <p class="text-blue-400 font-semibold mb-2">Past Sessions:</p>
+                                            <div id="tooltip-summaries-content"></div>
+                                        </div>
+                                    </div>
+                                </span>
+                            </div>
                             <div class="flex justify-between"><span class="text-gray-400">Goal:</span><span id="profile-goal" class="text-emerald-300">-</span></div>
                             <div class="flex justify-between"><span class="text-gray-400">Height:</span><span id="profile-height" class="text-white">-</span></div>
                             <div class="flex justify-between"><span class="text-gray-400">Weight:</span><span id="profile-weight" class="text-white">-</span></div>
@@ -507,6 +526,24 @@
                         <div id="workout-checklist" class="space-y-2">
                             <p class="text-gray-400 italic text-xs">Loading workout plan...</p>
                         </div>
+                    </div>
+
+                    <!-- Session Notes/Summary -->
+                    <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
+                        <h3 class="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                            </svg>
+                            Session Notes
+                        </h3>
+                        <textarea id="session-notes" rows="4" 
+                            class="w-full rounded-md border border-gray-600 bg-gray-900/50 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-yellow-500/50 focus:ring-1 focus:ring-yellow-500/30 resize-none"
+                            placeholder="Add notes about this session: performance, improvements, recommendations, next steps..."></textarea>
+                        <button id="save-session-notes" 
+                            class="mt-2 w-full rounded-md bg-gradient-to-r from-yellow-600 to-orange-600 px-4 py-2 text-white text-xs font-semibold hover:from-yellow-500 hover:to-orange-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            💾 Save Session Summary
+                        </button>
+                        <p id="notes-status" class="mt-2 text-xs text-gray-400 hidden"></p>
                     </div>
                 </div>
             </div>
@@ -555,6 +592,18 @@
                         <div id="user-workout-checklist" class="space-y-2">
                             <p class="text-gray-400 italic text-xs">Loading workout plan...</p>
                         </div>
+                    </div>
+
+                    <!-- Past Sessions with Coach -->
+                    <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
+                        <h3 class="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Past Sessions with Coach
+                        </h3>
+                        <div id="user-past-summaries-list" class="space-y-3 max-h-96 overflow-y-auto"></div>
+                        <p id="user-summaries-empty" class="text-gray-400 italic text-xs">No past sessions yet</p>
                     </div>
                 </div>
             </div>
