@@ -101,9 +101,11 @@ const coachBioEl = document.getElementById("coach-bio");
 const coachExperienceEl = document.getElementById("coach-experience");
 const coachRateEl = document.getElementById("coach-rate");
 
+let currentUserId = null; // Track current user ID
 let currentCoachId = null;
 let notificationsListener = null;
 let bookingsListener = null;
+let userBookingsListener = null; // Separate listener for user bookings
 
 // AI Workout elements
 const generateWorkoutBtn = document.getElementById("generate-workout");
@@ -125,6 +127,20 @@ const bookingLaterBtn = document.getElementById("booking-later-btn");
 let pendingBookingCoach = null; // { id, name }
 let pendingBookingGoal = null;
 let isBookingNow = true; // Track if user wants to start now or book for later
+
+// Video call elements
+const videoCallModal = document.getElementById("video-call-modal");
+const videoCallTitle = document.getElementById("video-call-title");
+const closeVideoCallBtn = document.getElementById("close-video-call");
+const jitsiContainer = document.getElementById("jitsi-container");
+const userProfilePanel = document.getElementById("user-profile-panel");
+const userWorkoutPanel = document.getElementById("user-workout-panel");
+let jitsiApi = null;
+let currentCallBookingId = null;
+let callStarted = false; // Track if the call has actually started
+let participantCount = 0; // Track number of participants
+let currentSessionUserId = null; // Track the user in current session
+let workoutChecklist = []; // Track workout items for the session
 
 function openBookingModal(coach, goal) {
     pendingBookingCoach = coach;
@@ -149,6 +165,806 @@ function closeBookingModal() {
     isBookingNow = true;
 }
 
+function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false) {
+    // Clean up any existing Jitsi instance first
+    if (jitsiApi) {
+        console.log('Disposing existing Jitsi instance');
+        jitsiApi.dispose();
+        jitsiApi = null;
+        jitsiContainer.innerHTML = '';
+    }
+    
+    currentCallBookingId = bookingId;
+    videoCallTitle.textContent = title;
+    
+    // Apply split-screen layout for coaches only
+    const isCoach = userType === 'coach';
+    if (isCoach) {
+        // Split mode: video on left, user profile panel on right
+        videoCallModal.style.width = '100%';
+        videoCallModal.style.left = '0';
+        videoCallModal.style.right = '0';
+        videoCallModal.style.inset = '0';
+        videoCallModal.style.height = '';
+        videoCallModal.style.top = '';
+        videoCallModal.style.bottom = '';
+        
+        // Show user profile panel for coaches
+        userProfilePanel.classList.remove('hidden');
+        userWorkoutPanel.classList.add('hidden');
+        
+        // Load user data for the session
+        loadUserProfileForSession(bookingId);
+    } else {
+        // Full screen for users with workout panel
+        videoCallModal.style.width = '';
+        videoCallModal.style.left = '';
+        videoCallModal.style.right = '';
+        videoCallModal.style.inset = '0';
+        videoCallModal.style.height = '';
+        videoCallModal.style.top = '';
+        videoCallModal.style.bottom = '';
+        
+        // Show workout panel for users, hide profile panel
+        console.log('👤 User view - showing workout panel');
+        userProfilePanel.classList.add('hidden');
+        userWorkoutPanel.classList.remove('hidden');
+        console.log('User workout panel hidden class:', userWorkoutPanel.classList.contains('hidden'));
+        
+        // Load user's own workout data
+        loadUserWorkoutForSession(bookingId);
+    }
+    
+    videoCallModal.classList.remove("hidden");
+    callStarted = false; // Reset flag
+    participantCount = 0; // Reset participant count
+    
+    // Initialize Jitsi Meet with proper config
+    const domain = 'meet.jit.si';
+    const options = {
+        roomName: roomName,
+        width: '100%',
+        height: '100%',
+        parentNode: jitsiContainer,
+        configOverwrite: {
+            startWithAudioMuted: true,
+            startWithVideoMuted: true,
+            prejoinPageEnabled: false,
+            disableDeepLinking: true,
+            enableWelcomePage: false,
+            enableClosePage: false,
+            requireDisplayName: false,
+            // Fit video to container properly
+            resolution: 720,
+            constraints: {
+                video: {
+                    aspectRatio: 16 / 9,
+                    height: {
+                        ideal: 720,
+                        max: 720,
+                        min: 360
+                    }
+                }
+            },
+            // Completely disable lobby/waiting room/authentication
+            enableLobbyChat: false,
+            lobby: {
+                autoKnock: false,
+                enableChat: false
+            },
+            // Disable all authentication and moderation prompts
+            disableModeratorIndicator: true,
+            disableProfile: true,
+            hideConferenceSubject: false,
+            // Allow everyone to join without authentication
+            enableUserRolesBasedOnToken: false,
+            enableFeaturesBasedOnToken: false
+        },
+        interfaceConfigOverwrite: {
+            SHOW_JITSI_WATERMARK: false,
+            SHOW_WATERMARK_FOR_GUESTS: false,
+            DEFAULT_BACKGROUND: '#1f2937',
+            DISABLE_JOIN_LEAVE_NOTIFICATIONS: false,
+            MOBILE_APP_PROMO: false,
+            // Hide authentication-related UI elements
+            AUTHENTICATION_ENABLE: false,
+            FILM_STRIP_MAX_HEIGHT: 90,
+            VERTICAL_FILMSTRIP: false,
+            TOOLBAR_BUTTONS: [
+                'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
+                'fodeviceselection', 'hangup', 'chat', 'recording',
+                'livestreaming', 'etherpad', 'sharedvideo', 'settings', 'raisehand',
+                'videoquality', 'filmstrip', 'stats', 'shortcuts',
+                'tileview', 'videobackgroundblur', 'download', 'help', 'mute-everyone'
+            ]
+        },
+        userInfo: {
+            displayName: title.replace('Session with ', '')
+        }
+    };
+    
+    console.log('Starting Jitsi call with room:', roomName, 'Role:', isModerator ? 'Coach (first to join will be moderator)' : 'User');
+    
+    // Check if Jitsi API is available
+    if (typeof window.JitsiMeetExternalAPI === 'undefined') {
+        console.error('Jitsi Meet External API not loaded');
+        alert('Video call service is not available. Please refresh the page and try again.');
+        closeVideoCall();
+        return;
+    }
+    
+    jitsiApi = new window.JitsiMeetExternalAPI(domain, options);
+    
+    // Track when the conference actually starts (user joins successfully)
+    jitsiApi.addEventListener('videoConferenceJoined', () => {
+        console.log('User successfully joined video conference');
+        callStarted = true;
+    });
+    
+    // Track participant count to avoid ending call prematurely
+    jitsiApi.addEventListener('participantJoined', () => {
+        participantCount++;
+        console.log('Participant joined, total:', participantCount);
+    });
+    
+    jitsiApi.addEventListener('participantLeft', () => {
+        participantCount--;
+        console.log('Participant left, remaining:', participantCount);
+    });
+    
+    // Listen for when user leaves the call - but only if call has started
+    jitsiApi.addEventListener('videoConferenceLeft', async () => {
+        console.log('videoConferenceLeft event fired, callStarted:', callStarted);
+        // Only end session if the call had actually started (avoid auth dialog triggers)
+        if (callStarted) {
+            // Add a small delay to ensure it's a real leave event, not a UI interaction
+            setTimeout(async () => {
+                if (!jitsiApi) return; // Already closed
+                console.log('User left video conference after delay check');
+                await handleVideoCallEnd();
+            }, 500);
+        }
+    });
+    
+    // Listen for when conference ends
+    jitsiApi.addEventListener('readyToClose', async () => {
+        console.log('Video conference ready to close');
+        if (callStarted) {
+            await handleVideoCallEnd();
+        }
+    });
+}
+
+async function handleVideoCallEnd() {
+    if (currentCallBookingId) {
+        try {
+            // Save workout checklist if coach
+            if (userType === 'coach' && workoutChecklist.length > 0) {
+                await saveWorkoutSession(currentCallBookingId, currentSessionUserId, workoutChecklist);
+            }
+            
+            // Automatically mark session as completed
+            await endSession(currentCallBookingId);
+            console.log('Session automatically ended:', currentCallBookingId);
+        } catch (e) {
+            console.error('Failed to auto-end session:', e);
+        }
+    }
+    closeVideoCall();
+}
+
+function closeVideoCall() {
+    if (jitsiApi) {
+        jitsiApi.dispose();
+        jitsiApi = null;
+    }
+    
+    // Cleanup workout progress listener
+    if (workoutProgressListener) {
+        workoutProgressListener();
+        workoutProgressListener = null;
+        console.log('🔌 Workout progress listener disconnected');
+    }
+    
+    videoCallModal.classList.add("hidden");
+    userProfilePanel.classList.add("hidden");
+    userWorkoutPanel.classList.add("hidden");
+    // Reset inline styles
+    videoCallModal.style.width = '';
+    videoCallModal.style.left = '';
+    videoCallModal.style.right = '';
+    videoCallModal.style.inset = '';
+    videoCallModal.style.height = '';
+    videoCallModal.style.top = '';
+    videoCallModal.style.bottom = '';
+    jitsiContainer.innerHTML = '';
+    currentCallBookingId = null;
+    currentSessionUserId = null;
+    workoutChecklist = [];
+    callStarted = false; // Reset flag
+    participantCount = 0; // Reset count
+}
+
+// Close video call button handler
+closeVideoCallBtn.addEventListener("click", async () => {
+    if (currentCallBookingId && confirm('Are you sure you want to end this session?')) {
+        await handleVideoCallEnd();
+    }
+});
+
+// Load user profile data for the coaching session
+async function loadUserProfileForSession(bookingId) {
+    try {
+        // Get booking details
+        const bookingRef = doc(db, "bookings", bookingId);
+        const bookingSnap = await getDoc(bookingRef);
+        
+        if (!bookingSnap.exists()) {
+            console.error('Booking not found');
+            return;
+        }
+        
+        const booking = bookingSnap.data();
+        currentSessionUserId = booking.userId;
+        
+        // Load user profile
+        const userRef = doc(db, "users", booking.userId);
+        const userSnap = await getDoc(userRef);
+        
+        if (userSnap.exists()) {
+            const userData = userSnap.data();
+            
+            // Populate profile summary
+            document.getElementById('profile-name').textContent = userData.name || booking.userName || 'User';
+            document.getElementById('profile-goal').textContent = userData.goal || booking.goal || '-';
+            document.getElementById('profile-height').textContent = userData.heightCm ? `${userData.heightCm} cm` : '-';
+            document.getElementById('profile-weight').textContent = userData.weightKg ? `${userData.weightKg} kg` : '-';
+            document.getElementById('profile-requirements').textContent = userData.requirements || 'No specific requirements';
+            
+            // Load past workout sessions
+            await loadPastWorkouts(booking.userId);
+            
+            // Generate AI workout plan
+            await generateWorkoutPlan(userData);
+        }
+    } catch (error) {
+        console.error('Error loading user profile for session:', error);
+    }
+}
+
+// Load past workout sessions for the user
+async function loadPastWorkouts(userId) {
+    console.log('📚 Loading past workouts for user:', userId);
+    const pastWorkoutsList = document.getElementById('past-workouts-list');
+    
+    if (!pastWorkoutsList) {
+        console.error('❌ Past workouts list element not found');
+        return;
+    }
+    
+    try {
+        pastWorkoutsList.innerHTML = '<p class="text-gray-400 italic text-xs">Loading...</p>';
+        
+        // First try to get from workoutSessions collection
+        console.log('🔍 Querying workoutSessions collection...');
+        let q = query(
+            collection(db, "workoutSessions"),
+            where("userId", "==", userId),
+            orderBy("completedAt", "desc"),
+            limit(5)
+        );
+        
+        let snapshot = await getDocs(q);
+        console.log('Workout sessions found:', snapshot.size);
+        
+        // If no workout sessions, fall back to completed bookings
+        if (snapshot.empty) {
+            console.log('⚠️ No workout sessions, trying completed bookings...');
+            try {
+                q = query(
+                    collection(db, "bookings"),
+                    where("userId", "==", userId),
+                    where("status", "==", "completed"),
+                    orderBy("createdAt", "desc"),
+                    limit(5)
+                );
+                
+                snapshot = await getDocs(q);
+                console.log('Completed bookings found:', snapshot.size);
+            } catch (bookingError) {
+                console.warn('⚠️ Booking query failed (may need composite index):', bookingError.message);
+                // Try simple query without orderBy
+                q = query(
+                    collection(db, "bookings"),
+                    where("userId", "==", userId),
+                    where("status", "==", "completed"),
+                    limit(5)
+                );
+                snapshot = await getDocs(q);
+                console.log('Completed bookings (no order) found:', snapshot.size);
+            }
+        }
+        
+        if (snapshot.empty) {
+            console.log('ℹ️ No past sessions found');
+            pastWorkoutsList.innerHTML = '<p class="text-gray-400 italic text-xs">No past sessions</p>';
+            return;
+        }
+        
+        pastWorkoutsList.innerHTML = '';
+        const sessions = [];
+        snapshot.forEach(doc => {
+            sessions.push({ id: doc.id, ...doc.data() });
+        });
+        
+        console.log('✅ Rendering', sessions.length, 'past sessions');
+        
+        sessions.forEach(session => {
+            const date = session.completedAt?.toDate?.() || session.endedAt?.toDate?.() || session.createdAt?.toDate?.() || new Date();
+            const div = document.createElement('div');
+            div.className = 'bg-gray-900/50 rounded p-2 border border-gray-700/30';
+            div.innerHTML = `
+                <div class="flex justify-between items-start mb-1">
+                    <span class="text-white font-medium text-xs">${date.toLocaleDateString()}</span>
+                    <span class="text-emerald-400 text-xs">${session.completedItems ? session.completedItems + ' items' : 'Completed'}</span>
+                </div>
+                <p class="text-gray-400 text-xs">${session.coachName || 'Coach'} - ${session.goal || 'Session'}</p>
+            `;
+            pastWorkoutsList.appendChild(div);
+        });
+        
+        console.log('✅ Past sessions rendered successfully');
+    } catch (error) {
+        console.error('❌ Error loading past workouts:', error);
+        console.error('Error details:', error.message);
+        console.error('Error code:', error.code);
+        
+        if (pastWorkoutsList) {
+            if (error.code === 'failed-precondition' || error.message?.includes('index')) {
+                pastWorkoutsList.innerHTML = '<p class="text-yellow-400 italic text-xs">Database index required. Check console.</p>';
+                console.error('🔥 FIRESTORE INDEX REQUIRED! Click the link in the error above or check Firebase Console.');
+            } else {
+                pastWorkoutsList.innerHTML = '<p class="text-red-400 italic text-xs">Unable to load past sessions</p>';
+            }
+        }
+    }
+}
+
+// Generate AI workout plan and display as checklist
+async function generateWorkoutPlan(userData) {
+    const checklistContainer = document.getElementById('workout-checklist');
+    
+    try {
+        checklistContainer.innerHTML = '<p class="text-gray-400 italic text-xs">Generating workout plan...</p>';
+        
+        // Generate AI workout plan based on user profile
+        let plan = [];
+        
+        try {
+            plan = await aiService.generateWorkoutPlan(userData);
+        } catch (aiError) {
+            console.warn('AI generation failed, using default plan:', aiError);
+        }
+        
+        // Use default plan if AI fails or returns empty
+        if (!plan || plan.length === 0) {
+            const goal = userData.goal || 'general fitness';
+            plan = [
+                'Warm-up: 5 minutes light cardio (jogging or jumping jacks)',
+                `${goal === 'weight_loss' ? 'HIIT intervals: 20 minutes' : goal === 'muscle_gain' ? 'Strength training: 3 sets compound exercises' : goal === 'flexibility' ? 'Dynamic stretching: 15 minutes' : 'Mixed cardio: 20 minutes'}`,
+                'Core work: Planks 3x30 seconds',
+                'Strength exercise: Push-ups 3 sets of 10-15 reps',
+                'Lower body: Squats 3 sets of 15 reps',
+                'Cardio burst: 5 minutes moderate intensity',
+                'Cool-down: 5 minutes stretching and deep breathing'
+            ];
+        }
+        
+        workoutChecklist = plan.map((item, index) => ({
+            id: index,
+            exercise: item,
+            completed: false
+        }));
+        
+        renderWorkoutChecklist();
+    } catch (error) {
+        console.error('Error generating workout plan:', error);
+        
+        // Fallback to basic default plan
+        workoutChecklist = [
+            { id: 0, exercise: 'Warm-up: 5 minutes cardio', completed: false },
+            { id: 1, exercise: 'Main exercise (customize based on goal)', completed: false },
+            { id: 2, exercise: 'Cool-down: 5 minutes stretching', completed: false }
+        ];
+        
+        renderWorkoutChecklist();
+    }
+}
+
+// Render workout checklist
+function renderWorkoutChecklist() {
+    const checklistContainer = document.getElementById('workout-checklist');
+    
+    if (!checklistContainer) {
+        console.error('Workout checklist container not found');
+        return;
+    }
+    
+    checklistContainer.innerHTML = '';
+    
+    if (!workoutChecklist || workoutChecklist.length === 0) {
+        checklistContainer.innerHTML = '<p class="text-gray-400 italic text-xs">No workout plan available</p>';
+        return;
+    }
+    
+    const div = document.createElement('div');
+    div.className = 'space-y-2';
+    
+    workoutChecklist.forEach(item => {
+        const label = document.createElement('label');
+        label.className = 'flex items-start gap-2 text-xs cursor-pointer hover:bg-gray-700/30 p-2 rounded transition-colors';
+        label.innerHTML = `
+            <input type="checkbox" class="mt-0.5 workout-item rounded" data-id="${item.id}" ${item.completed ? 'checked' : ''}>
+            <span class="${item.completed ? 'line-through text-gray-500' : 'text-white'}">${item.exercise}</span>
+        `;
+        div.appendChild(label);
+    });
+    
+    checklistContainer.appendChild(div);
+    attachCheckboxListeners();
+}
+
+// Attach checkbox event listeners
+function attachCheckboxListeners() {
+    document.querySelectorAll('.workout-item').forEach(checkbox => {
+        checkbox.addEventListener('change', async (e) => {
+            const itemId = parseInt(e.target.dataset.id);
+            const item = workoutChecklist.find(w => w.id === itemId);
+            if (item) {
+                item.completed = e.target.checked;
+                renderWorkoutChecklist();
+                
+                // Update in Firestore in real-time for syncing with user view
+                if (currentCallBookingId) {
+                    await updateWorkoutProgress(currentCallBookingId, workoutChecklist);
+                }
+            }
+        });
+    });
+}
+
+// Update workout progress in real-time (for syncing between coach and user)
+async function updateWorkoutProgress(bookingId, checklist) {
+    try {
+        const sessionRef = doc(db, "activeWorkoutSessions", bookingId);
+        await setDoc(sessionRef, {
+            bookingId: bookingId,
+            userId: currentSessionUserId,
+            coachId: currentCoachId,
+            checklist: checklist,
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+        console.log('✅ Workout progress updated in real-time');
+    } catch (error) {
+        console.error('❌ Error updating workout progress:', error);
+    }
+}
+
+// Save workout session to database
+// Load user's own workout data for their panel
+async function loadUserWorkoutForSession(bookingId) {
+    console.log('🏋️ Loading user workout for session:', bookingId);
+    console.log('Current user ID:', currentUserId);
+    
+    try {
+        const bookingRef = doc(db, "bookings", bookingId);
+        const bookingSnap = await getDoc(bookingRef);
+        
+        if (!bookingSnap.exists()) {
+            console.error('❌ Booking not found:', bookingId);
+            return;
+        }
+        
+        const booking = bookingSnap.data();
+        console.log('✅ Booking data:', booking);
+        currentSessionUserId = currentUserId; // User viewing their own data
+        
+        // Display goal
+        const goalElement = document.getElementById('user-session-goal');
+        console.log('Goal element found:', !!goalElement);
+        if (goalElement) {
+            goalElement.textContent = booking.goal || 'General Fitness';
+            console.log('✅ Goal set to:', goalElement.textContent);
+        }
+        
+        // Generate workout plan for user
+        const userRef = doc(db, "users", currentUserId);
+        const userSnap = await getDoc(userRef);
+        const userProfile = userSnap.exists() ? userSnap.data() : { goal: booking.goal };
+        console.log('User profile:', userProfile);
+        
+        // Generate AI workout plan
+        console.log('🤖 Generating AI workout plan...');
+        let plan = [];
+        try {
+            plan = await aiService.generateWorkoutPlan(userProfile);
+            console.log('✅ AI plan generated:', plan);
+        } catch (aiError) {
+            console.warn('⚠️ AI generation failed for user, using default plan:', aiError);
+        }
+        
+        // Use default plan if AI fails or returns empty
+        if (!plan || plan.length === 0) {
+            console.log('Using default workout plan');
+            const goal = userProfile.goal || booking.goal || 'general fitness';
+            plan = [
+                'Warm-up: 5 minutes light cardio (jogging or jumping jacks)',
+                `${goal === 'weight_loss' ? 'HIIT intervals: 20 minutes' : goal === 'muscle_gain' ? 'Strength training: 3 sets compound exercises' : goal === 'flexibility' ? 'Dynamic stretching: 15 minutes' : 'Mixed cardio: 20 minutes'}`,
+                'Core work: Planks 3x30 seconds',
+                'Strength exercise: Push-ups 3 sets of 10-15 reps',
+                'Lower body: Squats 3 sets of 15 reps',
+                'Cardio burst: 5 minutes moderate intensity',
+                'Cool-down: 5 minutes stretching and deep breathing'
+            ];
+            console.log('Default plan:', plan);
+        }
+        
+        // Map to consistent structure with exercise property
+        workoutChecklist = plan.map((exercise, index) => ({
+            id: index,
+            exercise: exercise,
+            completed: false
+        }));
+        
+        console.log('📋 Workout checklist created:', workoutChecklist);
+        console.log('Calling renderUserWorkoutChecklist...');
+        renderUserWorkoutChecklist();
+        
+        // Setup real-time listener for coach updates
+        setupWorkoutProgressListener(bookingId);
+        
+    } catch (error) {
+        console.error('❌ Error loading user workout:', error);
+        console.error('Stack trace:', error.stack);
+    }
+}
+
+// Setup real-time listener for workout progress updates (user view)
+let workoutProgressListener = null;
+function setupWorkoutProgressListener(bookingId) {
+    console.log('🔄 Setting up real-time workout progress listener for booking:', bookingId);
+    
+    const sessionRef = doc(db, "activeWorkoutSessions", bookingId);
+    workoutProgressListener = onSnapshot(sessionRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            console.log('📡 Real-time update received:', data);
+            
+            if (data.checklist) {
+                workoutChecklist = data.checklist;
+                renderUserWorkoutChecklist();
+                console.log('✅ User view updated with coach progress');
+            }
+        }
+    }, (error) => {
+        console.error('❌ Error in workout progress listener:', error);
+    });
+}
+
+// Render workout checklist for users (read-only, no checkboxes)
+function renderUserWorkoutChecklist() {
+    console.log('📝 Rendering user workout checklist (read-only)...');
+    const container = document.getElementById('user-workout-checklist');
+    console.log('Container element:', container);
+    
+    if (!container) {
+        console.error('❌ User workout checklist container not found!');
+        return;
+    }
+    
+    console.log('Workout checklist length:', workoutChecklist.length);
+    console.log('Workout checklist data:', workoutChecklist);
+    
+    if (workoutChecklist.length === 0) {
+        console.log('⚠️ Empty checklist, showing placeholder');
+        container.innerHTML = '<p class="text-gray-400 italic text-xs">Waiting for coach to start session...</p>';
+        updateUserProgress();
+        return;
+    }
+    
+    const html = workoutChecklist.map((item, index) => `
+        <div class="flex items-start gap-2 text-sm transition-colors py-2 border-b border-gray-700/30 last:border-0">
+            <div class="mt-0.5 flex-shrink-0">
+                ${item.completed 
+                    ? '<svg class="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>'
+                    : '<svg class="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" fill="none"></circle></svg>'
+                }
+            </div>
+            <span class="${item.completed ? 'line-through text-gray-500' : 'text-gray-300'} flex-1">
+                ${item.exercise}
+            </span>
+        </div>
+    `).join('');
+    
+    console.log('Generated HTML length:', html.length);
+    container.innerHTML = html;
+    console.log('✅ HTML injected into container');
+    
+    updateUserProgress();
+}
+
+// Update user progress bar
+function updateUserProgress() {
+    const completedCount = workoutChecklist.filter(item => item.completed).length;
+    const totalCount = workoutChecklist.length;
+    const percentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+    
+    console.log('📊 Progress update:', completedCount, '/', totalCount, '=', percentage.toFixed(1) + '%');
+    
+    const progressText = document.getElementById('user-progress-text');
+    const progressBar = document.getElementById('user-progress-bar');
+    
+    console.log('Progress text element:', !!progressText, 'Progress bar element:', !!progressBar);
+    
+    if (progressText) {
+        progressText.textContent = `${completedCount} / ${totalCount}`;
+        console.log('✅ Progress text updated:', progressText.textContent);
+    }
+    
+    if (progressBar) {
+        progressBar.style.width = `${percentage}%`;
+        console.log('✅ Progress bar width updated:', progressBar.style.width);
+    }
+    
+    // Cheer the user on progress! 🎉
+    showProgressCheer(completedCount, totalCount, percentage);
+}
+
+// Show encouraging messages as user makes progress
+let lastCheerCount = 0;
+function showProgressCheer(completedCount, totalCount, percentage) {
+    // Only show cheer when count increases (not on decreases)
+    if (completedCount <= lastCheerCount || completedCount === 0) {
+        lastCheerCount = completedCount;
+        return;
+    }
+    
+    lastCheerCount = completedCount;
+    
+    const cheerMessages = [
+        "💪 Great job! Keep going!",
+        "🔥 You're on fire!",
+        "⭐ Awesome work!",
+        "🚀 Keep pushing!",
+        "💯 You're crushing it!",
+        "🎯 Nailed it!",
+        "✨ Fantastic effort!",
+        "🏆 Champion mindset!",
+        "💥 Boom! One more down!",
+        "🌟 You're amazing!"
+    ];
+    
+    // Special messages for milestones
+    let message = '';
+    if (percentage === 100) {
+        message = "🎉🎊 INCREDIBLE! You completed the entire workout! 🏆💪";
+    } else if (percentage >= 75) {
+        message = "🔥💪 Almost there! Final push! You've got this! 🚀";
+    } else if (percentage >= 50) {
+        message = "⭐ Halfway done! You're unstoppable! 💪";
+    } else if (percentage >= 25) {
+        message = "🌟 Great start! Keep that momentum going! 🔥";
+    } else {
+        message = cheerMessages[Math.floor(Math.random() * cheerMessages.length)];
+    }
+    
+    // Create floating cheer notification
+    const cheer = document.createElement('div');
+    cheer.className = 'fixed top-20 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-emerald-500 to-blue-500 text-white px-6 py-3 rounded-full shadow-2xl font-bold text-lg z-50 animate-bounce';
+    cheer.style.animation = 'slideInDown 0.5s ease-out, fadeOut 0.5s ease-in 2.5s';
+    cheer.textContent = message;
+    
+    // Add custom animations
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideInDown {
+            from { transform: translate(-50%, -100px); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+    `;
+    
+    if (!document.querySelector('#cheer-animations')) {
+        style.id = 'cheer-animations';
+        document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(cheer);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+        cheer.remove();
+    }, 3000);
+    
+    // Add confetti effect on completion
+    if (percentage === 100) {
+        createConfetti();
+    }
+}
+
+// Create confetti effect for workout completion
+function createConfetti() {
+    const colors = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'];
+    const confettiCount = 50;
+    
+    for (let i = 0; i < confettiCount; i++) {
+        const confetti = document.createElement('div');
+        confetti.style.position = 'fixed';
+        confetti.style.left = Math.random() * 100 + '%';
+        confetti.style.top = '-10px';
+        confetti.style.width = '10px';
+        confetti.style.height = '10px';
+        confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        confetti.style.opacity = '0.8';
+        confetti.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
+        confetti.style.zIndex = '9999';
+        confetti.style.pointerEvents = 'none';
+        
+        document.body.appendChild(confetti);
+        
+        const duration = 2000 + Math.random() * 1000;
+        const rotation = Math.random() * 360;
+        const drift = (Math.random() - 0.5) * 200;
+        
+        confetti.animate([
+            { transform: 'translateY(0) rotate(0deg) translateX(0)', opacity: 0.8 },
+            { transform: `translateY(100vh) rotate(${rotation}deg) translateX(${drift}px)`, opacity: 0 }
+        ], {
+            duration: duration,
+            easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+        });
+        
+        setTimeout(() => confetti.remove(), duration);
+    }
+}
+
+async function saveWorkoutSession(bookingId, userId, checklist) {
+    try {
+        const completedItems = checklist.filter(item => item.completed);
+        
+        if (completedItems.length === 0) {
+            console.log('No items completed, skipping save');
+            return;
+        }
+        
+        const bookingRef = doc(db, "bookings", bookingId);
+        const bookingSnap = await getDoc(bookingRef);
+        const booking = bookingSnap.data();
+        
+        await addDoc(collection(db, "workoutSessions"), {
+            userId: userId,
+            bookingId: bookingId,
+            coachId: currentCoachId,
+            coachName: booking.coachName || 'Coach',
+            userName: booking.userName || 'User',
+            goal: booking.goal,
+            completedItems: completedItems.length,
+            totalItems: checklist.length,
+            exercises: completedItems.map(item => item.exercise),
+            allExercises: checklist.map(item => ({ exercise: item.exercise, completed: item.completed })),
+            completedAt: serverTimestamp(),
+            createdAt: serverTimestamp()
+        });
+        
+        console.log('Workout session saved successfully');
+    } catch (error) {
+        console.error('Error saving workout session:', error);
+    }
+}
+
 function toggleAuthUI(user) {
     const isSignedIn = !!user;
     
@@ -159,21 +975,27 @@ function toggleAuthUI(user) {
         btnSignIn.classList.remove("hidden");
         btnSignOut.classList.add("hidden");
         userMenu.classList.add("hidden");
+        coachMenu.classList.add("hidden");
         userDisplayName.textContent = "";
+        coachDisplayName.textContent = "";
     } else {
         gateEl.classList.add("hidden");
         btnSignIn.classList.add("hidden");
         btnSignOut.classList.remove("hidden");
-        userMenu.classList.remove("hidden");
-        userDisplayName.textContent = `${user.displayName ?? user.email}`;
         
         // Show appropriate view based on user type
         if (userType === 'coach') {
             appEl.classList.add("hidden");
             coachAppEl.classList.remove("hidden");
+            userMenu.classList.add("hidden");
+            coachMenu.classList.remove("hidden");
+            coachDisplayName.textContent = `${user.displayName ?? user.email}`;
         } else {
             appEl.classList.remove("hidden");
             coachAppEl.classList.add("hidden");
+            userMenu.classList.remove("hidden");
+            coachMenu.classList.add("hidden");
+            userDisplayName.textContent = `${user.displayName ?? user.email}`;
         }
     }
 }
@@ -356,11 +1178,26 @@ async function saveCoachProfile(user) {
         yearsExperience: Number(coachExperienceEl.value),
         hourlyRate: Number(coachRateEl.value),
         rating: 5.0, // Default rating
-        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
     };
     
-    await addDoc(collection(db, "coaches"), coachData);
+    // Check if coach profile already exists
+    const q = query(
+        collection(db, "coaches"),
+        where("email", "==", user.email),
+        limit(1)
+    );
+    const snap = await getDocs(q);
+    
+    if (!snap.empty) {
+        // Update existing profile
+        const coachDoc = snap.docs[0];
+        await updateDoc(doc(db, "coaches", coachDoc.id), coachData);
+    } else {
+        // Create new profile
+        coachData.createdAt = serverTimestamp();
+        await addDoc(collection(db, "coaches"), coachData);
+    }
 }
 
 async function saveUserProfile(user) {
@@ -503,7 +1340,19 @@ async function fetchCoachesForGoal(goal) {
     }
     
     const snap = await getDocs(q);
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    let items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    // Remove duplicate coaches by email (keep the most recent one)
+    const uniqueCoaches = new Map();
+    items.forEach(coach => {
+        const email = coach.email;
+        if (!uniqueCoaches.has(email) || 
+            (coach.updatedAt && (!uniqueCoaches.get(email).updatedAt || 
+             coach.updatedAt.toMillis() > uniqueCoaches.get(email).updatedAt.toMillis()))) {
+            uniqueCoaches.set(email, coach);
+        }
+    });
+    items = Array.from(uniqueCoaches.values());
     
     // Get AI recommendations if user profile exists (but don't fail if AI errors)
     const user = auth.currentUser;
@@ -623,25 +1472,58 @@ function createBookingCard(b, isActive) {
         cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 border border-red-500/30">✕ Cancelled</span>'
     };
     
-    const showJoinButton = b.status === 'confirmed' && b.meetingLink;
-    const showCancelButton = isActive && (b.status === "pending" || b.status === "confirmed");
-    const showEndButton = isActive && (b.status === "confirmed" || b.status === "active");
+    // Check if scheduled time has arrived (allow joining 5 minutes early)
+    const now = Date.now();
+    const scheduledTime = b.scheduledAt?.toMillis?.() ?? now;
+    const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
+    
+    // Show Join button if confirmed OR active (so both user and coach can join), has link, and time has arrived
+    const showJoinButton = (b.status === 'confirmed' || b.status === 'active') && b.meetingLink && canJoinYet;
+    const showCancelButton = isActive && b.status === "pending";
+    // Show End button only if time has arrived (canJoinYet) and status is confirmed/active
+    const showEndButton = isActive && (b.status === "confirmed" || b.status === "active") && canJoinYet;
     const showDeleteButton = !isActive && (b.status === "completed" || b.status === "cancelled");
     
     row.innerHTML = `
       <div class="flex-1">
         <p class="font-medium text-white">${b.coachName ?? b.coachId}</p>
         <p class="text-sm text-gray-400 mt-1">Goal: ${b.goal}</p>
-        <p class="text-xs text-gray-500 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>
+        ${b.status === 'active' ? '<p class="text-xs text-emerald-400 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-500 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>`}
       </div>
       <div class="flex items-center gap-3">
         ${statusBadges[b.status] || ''}
-        ${showJoinButton ? `<a href="${b.meetingLink}" target="_blank" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</a>` : ''}
+        ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${b.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
         ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ""}
         ${showCancelButton ? `<button id="${cancelBtnId}" class="rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-1.5 text-red-400 text-xs font-medium hover:bg-red-500/20">Cancel</button>` : ""}
         ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-600/50 bg-gray-800/30 px-3 py-1.5 text-gray-400 text-xs font-medium hover:bg-gray-700/50">Delete</button>` : ""}
       </div>
     `;
+    
+    if (showJoinButton) {
+        const btn = row.querySelector(`#${joinBtnId}`);
+        btn?.addEventListener("click", async () => {
+            btn.disabled = true;
+            btn.innerHTML = 'Joining...';
+            try {
+                // Only mark session as active if it's not already active
+                if (b.status !== 'active') {
+                    await updateDoc(doc(db, "bookings", b.id), { 
+                        status: "active",
+                        joinedAt: serverTimestamp()
+                    });
+                }
+                // Start embedded video call (user joins as participant)
+                const roomName = b.meetingId || b.meetingLink.split('/').pop().split('#')[0];
+                const title = `Session with ${b.coachName || 'Coach'}`;
+                startEmbeddedVideoCall(b.id, roomName, title, false);
+            } catch (e) {
+                console.error('Failed to join session:', e);
+                alert('Failed to join session: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
+            }
+        });
+    }
     
     if (showCancelButton) {
         const btn = row.querySelector(`#${cancelBtnId}`);
@@ -711,15 +1593,26 @@ async function fetchBookings() {
         renderBookings([]);
         return;
     }
+    
+    // Clean up previous listener
+    if (userBookingsListener) {
+        userBookingsListener();
+    }
+    
+    // Set up real-time listener for user bookings
     const q = query(
         collection(db, "bookings"),
         where("userId", "==", user.uid),
         orderBy("createdAt", "desc"),
         limit(20)
     );
-    const snap = await getDocs(q);
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderBookings(items);
+    
+    userBookingsListener = onSnapshot(q, (snapshot) => {
+        const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderBookings(items);
+    }, (error) => {
+        console.error('User bookings listener error:', error);
+    });
 }
 
 async function createBooking(coachId, goal, scheduledAt) {
@@ -738,8 +1631,8 @@ async function createBooking(coachId, goal, scheduledAt) {
     console.log('Using Jitsi Meet for video sessions');
     const roomName = generateMeetingRoom();
     const meetingId = roomName;
-    // Add config parameters to disable waiting room and moderator requirement
-    const meetingLink = `https://meet.jit.si/${roomName}#config.startWithAudioMuted=false&config.startWithVideoMuted=false&config.prejoinPageEnabled=false`;
+    // Use clean URL without hash parameters - configuration will be handled in the API
+    const meetingLink = `https://meet.jit.si/${roomName}`;
     const meetingPassword = '';
     
     const bookingData = {
@@ -1054,9 +1947,16 @@ function createCoachBookingCard(booking, category) {
         cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 border border-red-500/30">✕ Cancelled</span>'
     };
     
+    // Check if scheduled time has arrived (allow joining 5 minutes early)
+    const now = Date.now();
+    const scheduledTime = booking.scheduledAt?.toMillis?.() ?? now;
+    const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
+    
     const showConfirmButton = booking.status === 'pending' && category !== 'past';
-    const showJoinButton = booking.status === 'confirmed' && booking.meetingLink && category !== 'past';
-    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'active');
+    // Show Join button if confirmed OR active (so both user and coach can join), has link, and time has arrived
+    const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active') && booking.meetingLink && category !== 'past' && canJoinYet;
+    // Show End button only if time has arrived (canJoinYet) and status is confirmed/active
+    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'active') && canJoinYet;
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
     
     card.innerHTML = `
@@ -1064,12 +1964,12 @@ function createCoachBookingCard(booking, category) {
             <div class="flex-1">
                 <p class="font-medium text-white">${booking.userName || booking.userEmail || 'User'}</p>
                 <p class="text-sm text-gray-400 mt-1">Goal: ${booking.goal}</p>
-                ${category !== 'active' ? `<p class="text-xs text-gray-500 mt-1">🕐 ${time}</p>` : '<p class="text-xs text-emerald-400 mt-1">⚡ Session in progress</p>'}
+                ${booking.status === 'active' ? '<p class="text-xs text-emerald-400 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-500 mt-1">🕐 ${time}</p>`}
             </div>
             <div class="flex items-center gap-2">
                 ${statusBadges[booking.status] || ''}
                 ${showConfirmButton ? `<button id="${confirmBtnId}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500">Confirm Booking</button>` : ''}
-                ${showJoinButton ? `<a href="${booking.meetingLink}" target="_blank" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</a>` : ''}
+                ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${booking.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
                 ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ''}
                 ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-600/50 bg-gray-800/30 px-3 py-1.5 text-gray-400 text-xs font-medium hover:bg-gray-700/50">Delete</button>` : ''}
             </div>
@@ -1091,6 +1991,35 @@ function createCoachBookingCard(booking, category) {
                     alert('Failed to confirm booking: ' + e.message);
                     confirmBtn.disabled = false;
                     confirmBtn.textContent = 'Confirm Booking';
+                }
+            });
+        }, 0);
+    }
+    
+    // Add event listener for join button
+    if (showJoinButton) {
+        setTimeout(() => {
+            const joinBtn = card.querySelector(`#${joinBtnId}`);
+            joinBtn?.addEventListener('click', async () => {
+                joinBtn.disabled = true;
+                joinBtn.innerHTML = 'Joining...';
+                try {
+                    // Only mark session as active if it's not already active
+                    if (booking.status !== 'active') {
+                        await updateDoc(doc(db, "bookings", booking.id), { 
+                            status: "active",
+                            joinedAt: serverTimestamp()
+                        });
+                    }
+                    // Start embedded video call (coach joins as moderator)
+                    const roomName = booking.meetingId || booking.meetingLink.split('/').pop().split('#')[0];
+                    const title = `Session with ${booking.userName || 'User'}`;
+                    startEmbeddedVideoCall(booking.id, roomName, title, true);
+                } catch (e) {
+                    console.error('Failed to join session:', e);
+                    alert('Failed to join session: ' + e.message);
+                    joinBtn.disabled = false;
+                    joinBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
                 }
             });
         }, 0);
@@ -1733,6 +2662,9 @@ coachDropdown?.addEventListener("click", (e) => {
 onAuthStateChanged(auth, async (user) => {
     toggleAuthUI(user);
     if (user) {
+        currentUserId = user.uid; // Set global user ID
+        console.log('🔑 User authenticated:', user.email, 'UID:', currentUserId);
+        
         if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
             if (coachId) {
@@ -1755,6 +2687,21 @@ onAuthStateChanged(auth, async (user) => {
         renderCoaches([], null);
         renderBookings([]);
         renderCoachCalendar([]);
+        currentUserId = null;
         currentCoachId = null;
+        
+        // Clean up listeners on sign out
+        if (userBookingsListener) {
+            userBookingsListener();
+            userBookingsListener = null;
+        }
+        if (bookingsListener) {
+            bookingsListener();
+            bookingsListener = null;
+        }
+        if (notificationsListener) {
+            notificationsListener();
+            notificationsListener = null;
+        }
     }
 });

@@ -291,6 +291,37 @@ Return ONLY valid JSON, no markdown.`;
     }
 
     /**
+     * Generate workout plan as a simple array of exercise strings
+     */
+    async generateWorkoutPlan(userProfile, customPrompt = null) {
+        const prompt = customPrompt || `Generate a focused workout plan for ${userProfile.goal || 'general fitness'}. 
+User: ${userProfile.heightCm}cm, ${userProfile.weightKg}kg. 
+Requirements: ${userProfile.requirements || 'None'}.
+
+Return exactly 5-7 exercises as a simple JSON array of strings. Each string should be a complete exercise description with reps/duration.
+Example: ["Warm-up: 5 min jogging", "Push-ups: 3 sets of 12 reps", "Squats: 3 sets of 15 reps"]
+
+Return ONLY the JSON array, no other text or markdown.`;
+
+        try {
+            const response = await this._callOpenAI(prompt, 'gpt-4o-mini', 0.7, 300);
+            const cleanJson = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const parsed = JSON.parse(cleanJson);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            console.error('AI Workout Plan Error:', error);
+            // Return default plan on error
+            return [
+                'Warm-up: 5 minutes light cardio',
+                'Main exercise set 1 (customize based on goal)',
+                'Main exercise set 2 (customize based on goal)',
+                'Strength training (20 minutes)',
+                'Cool-down: 5 minutes stretching'
+            ];
+        }
+    }
+
+    /**
      * Calculate fitness level based on profile
      */
     _calculateFitnessLevel(userProfile) {
