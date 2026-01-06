@@ -57,9 +57,31 @@ const mainContent = document.getElementById("main-content");
 // Auth gate buttons
 const btnUserLogin = document.getElementById("btn-user-login");
 const btnCoachLogin = document.getElementById("btn-coach-login");
+const btnAdminLogin = document.getElementById("btn-admin-login");
+
+// Admin elements
+const adminAppEl = document.getElementById("admin-app");
+const adminMenu = document.getElementById("admin-menu");
+const adminDisplayEl = document.getElementById("admin-display");
+const adminDropdown = document.getElementById("admin-dropdown");
+const btnAdminSignOut = document.getElementById("btn-admin-sign-out");
+const totalUsersCount = document.getElementById("total-users-count");
+const totalCoachesCount = document.getElementById("total-coaches-count");
+const totalBookingsCount = document.getElementById("total-bookings-count");
+const inactiveUsersCount = document.getElementById("inactive-users-count");
+const usersLast7Days = document.getElementById("users-last-7-days");
+const coachesLast7Days = document.getElementById("coaches-last-7-days");
+const bookingsLast7Days = document.getElementById("bookings-last-7-days");
+const refreshAdminStats = document.getElementById("refresh-admin-stats");
+const sendEngagementEmails = document.getElementById("send-engagement-emails");
+const recentActivityList = document.getElementById("recent-activity-list");
+const activityFilter = document.getElementById("activity-filter");
+const userSearch = document.getElementById("user-search");
+const searchUsersBtn = document.getElementById("search-users-btn");
+const usersList = document.getElementById("users-list");
 
 // Restore userType from localStorage on page load
-let userType = localStorage.getItem('userType') || null; // 'user' or 'coach'
+let userType = localStorage.getItem('userType') || null; // 'user', 'coach', or 'admin'
 
 const heightEl = document.getElementById("height");
 const weightEl = document.getElementById("weight");
@@ -1268,10 +1290,12 @@ function toggleAuthUI(user) {
         gateEl.classList.remove("hidden");
         appEl.classList.add("hidden");
         coachAppEl.classList.add("hidden");
+        adminAppEl.classList.add("hidden");
         btnSignIn.classList.remove("hidden");
         btnSignOut.classList.add("hidden");
         userMenu.classList.add("hidden");
         coachMenu.classList.add("hidden");
+        adminMenu.classList.add("hidden");
         userDisplayName.textContent = "";
         coachDisplayName.textContent = "";
     } else {
@@ -1280,17 +1304,32 @@ function toggleAuthUI(user) {
         btnSignOut.classList.remove("hidden");
         
         // Show appropriate view based on user type
-        if (userType === 'coach') {
+        if (userType === 'admin') {
+            appEl.classList.add("hidden");
+            coachAppEl.classList.add("hidden");
+            adminAppEl.classList.remove("hidden");
+            userMenu.classList.add("hidden");
+            coachMenu.classList.add("hidden");
+            adminMenu.classList.remove("hidden");
+            const adminDisplayName = adminMenu.querySelector('#admin-display span');
+            if (adminDisplayName) {
+                adminDisplayName.textContent = `${user.displayName ?? user.email}`;
+            }
+        } else if (userType === 'coach') {
             appEl.classList.add("hidden");
             coachAppEl.classList.remove("hidden");
+            adminAppEl.classList.add("hidden");
             userMenu.classList.add("hidden");
             coachMenu.classList.remove("hidden");
+            adminMenu.classList.add("hidden");
             coachDisplayName.textContent = `${user.displayName ?? user.email}`;
         } else {
             appEl.classList.remove("hidden");
             coachAppEl.classList.add("hidden");
+            adminAppEl.classList.add("hidden");
             userMenu.classList.remove("hidden");
             coachMenu.classList.add("hidden");
+            adminMenu.classList.add("hidden");
             userDisplayName.textContent = `${user.displayName ?? user.email}`;
         }
     }
@@ -2484,6 +2523,12 @@ btnCoachLogin.addEventListener("click", () => {
     signInUser();
 });
 
+btnAdminLogin.addEventListener("click", () => {
+    userType = 'admin';
+    localStorage.setItem('userType', 'admin');
+    signInUser();
+});
+
 async function signInUser() {
     console.log(`Sign in as ${userType} clicked`);
     const provider = new GoogleAuthProvider();
@@ -2940,19 +2985,435 @@ userDisplayEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     userDropdown.classList.toggle("hidden");
     coachDropdown?.classList.add("hidden"); // Close coach dropdown if open
+    adminDropdown?.classList.add("hidden"); // Close admin dropdown if open
 });
 
 coachDisplayEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     coachDropdown.classList.toggle("hidden");
     userDropdown?.classList.add("hidden"); // Close user dropdown if open
+    adminDropdown?.classList.add("hidden"); // Close admin dropdown if open
+});
+
+adminDisplayEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    adminDropdown.classList.toggle("hidden");
+    userDropdown?.classList.add("hidden"); // Close user dropdown if open
+    coachDropdown?.classList.add("hidden"); // Close coach dropdown if open
 });
 
 // Close dropdowns when clicking outside
 document.addEventListener("click", () => {
     userDropdown?.classList.add("hidden");
     coachDropdown?.classList.add("hidden");
+    adminDropdown?.classList.add("hidden");
 });
+
+// Admin sign out handler
+btnAdminSignOut?.addEventListener("click", async () => {
+    await signOut(auth);
+    userType = null;
+    localStorage.removeItem('userType');
+});
+
+// ========== ADMIN FUNCTIONS ==========
+
+/**
+ * Check if user has admin role
+ */
+async function checkAdminRole(email) {
+    try {
+        const adminsRef = collection(db, 'admins');
+        const q = query(adminsRef, where('email', '==', email));
+        const snapshot = await getDocs(q);
+        return !snapshot.empty;
+    } catch (error) {
+        console.error('Error checking admin role:', error);
+        return false;
+    }
+}
+
+/**
+ * Update lastLoginAt timestamp for activity tracking
+ */
+async function updateLastLogin(userId, email) {
+    try {
+        // Update in users collection if exists
+        const userRef = doc(db, 'users', userId);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+            await updateDoc(userRef, {
+                lastLoginAt: serverTimestamp(),
+                email: email
+            });
+        }
+        
+        // Update in coaches collection if exists
+        const coachesRef = collection(db, 'coaches');
+        const coachQuery = query(coachesRef, where('email', '==', email));
+        const coachSnap = await getDocs(coachQuery);
+        if (!coachSnap.empty) {
+            const coachDoc = coachSnap.docs[0];
+            await updateDoc(doc(db, 'coaches', coachDoc.id), {
+                lastLoginAt: serverTimestamp()
+            });
+        }
+    } catch (error) {
+        console.error('Error updating last login:', error);
+    }
+}
+
+/**
+ * Fetch admin analytics data
+ */
+async function fetchAdminAnalytics() {
+    try {
+        const now = new Date();
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        
+        // Fetch all users
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const users = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Fetch all coaches
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+        const coaches = coachesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Fetch all bookings
+        const bookingsSnapshot = await getDocs(collection(db, 'bookings'));
+        const bookings = bookingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Calculate statistics
+        const usersLast7 = users.filter(u => {
+            const createdAt = u.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+        
+        const coachesLast7 = coaches.filter(c => {
+            const createdAt = c.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+        
+        const bookingsLast7 = bookings.filter(b => {
+            const createdAt = b.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+        
+        // Find inactive users (no login in 3+ days)
+        const inactiveUsers = [...users, ...coaches].filter(account => {
+            const lastLogin = account.lastLoginAt?.toDate();
+            if (!lastLogin) return true; // Never logged in
+            return lastLogin < threeDaysAgo;
+        });
+        
+        // Update UI
+        totalUsersCount.textContent = users.length;
+        totalCoachesCount.textContent = coaches.length;
+        totalBookingsCount.textContent = bookings.length;
+        inactiveUsersCount.textContent = inactiveUsers.length;
+        usersLast7Days.textContent = `+${usersLast7} in last 7 days`;
+        coachesLast7Days.textContent = `+${coachesLast7} in last 7 days`;
+        bookingsLast7Days.textContent = `+${bookingsLast7} in last 7 days`;
+        
+        // Fetch recent activity
+        await fetchRecentActivity();
+        
+    } catch (error) {
+        console.error('Error fetching admin analytics:', error);
+        alert('Failed to load analytics data');
+    }
+}
+
+/**
+ * Fetch recent activity
+ */
+async function fetchRecentActivity() {
+    try {
+        const activities = [];
+        
+        // Get recent bookings
+        const bookingsQuery = query(
+            collection(db, 'bookings'),
+            orderBy('createdAt', 'desc'),
+            limit(10)
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        bookingsSnap.forEach(doc => {
+            const data = doc.data();
+            activities.push({
+                type: 'booking',
+                timestamp: data.createdAt?.toDate(),
+                description: `New booking: ${data.userName} with ${data.coachName}`,
+                data: data
+            });
+        });
+        
+        // Get recent workout sessions
+        const sessionsQuery = query(
+            collection(db, 'workoutSessions'),
+            orderBy('completedAt', 'desc'),
+            limit(10)
+        );
+        const sessionsSnap = await getDocs(sessionsQuery);
+        sessionsSnap.forEach(doc => {
+            const data = doc.data();
+            activities.push({
+                type: 'session',
+                timestamp: data.completedAt?.toDate(),
+                description: `Session completed: ${data.userName || 'User'} with coach`,
+                data: data
+            });
+        });
+        
+        // Sort by timestamp
+        activities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        
+        // Render activities
+        renderRecentActivity(activities.slice(0, 20));
+        
+    } catch (error) {
+        console.error('Error fetching recent activity:', error);
+    }
+}
+
+/**
+ * Render recent activity list
+ */
+function renderRecentActivity(activities) {
+    if (!activities || activities.length === 0) {
+        recentActivityList.innerHTML = '<p class="p-4 text-sm text-gray-500 dark:text-gray-400 italic">No recent activity</p>';
+        return;
+    }
+    
+    recentActivityList.innerHTML = activities.map(activity => {
+        const timeStr = activity.timestamp ? activity.timestamp.toLocaleString() : 'Unknown time';
+        const iconColor = activity.type === 'booking' ? 'text-blue-600' : 'text-green-600';
+        const icon = activity.type === 'booking' ? '📅' : '✅';
+        
+        return `
+            <div class="p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                <div class="flex items-start gap-3">
+                    <span class="text-xl">${icon}</span>
+                    <div class="flex-1">
+                        <p class="text-sm text-gray-900 dark:text-gray-100">${activity.description}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${timeStr}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Send re-engagement emails to inactive users
+ */
+async function sendReEngagementEmails() {
+    try {
+        const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+        
+        // Fetch users
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+        
+        const allAccounts = [
+            ...usersSnapshot.docs.map(doc => ({ id: doc.id, type: 'user', ...doc.data() })),
+            ...coachesSnapshot.docs.map(doc => ({ id: doc.id, type: 'coach', ...doc.data() }))
+        ];
+        
+        // Filter inactive accounts
+        const inactiveAccounts = allAccounts.filter(account => {
+            const lastLogin = account.lastLoginAt?.toDate();
+            if (!lastLogin) return true; // Never logged in
+            return lastLogin < threeDaysAgo;
+        });
+        
+        if (inactiveAccounts.length === 0) {
+            alert('No inactive users found!');
+            return;
+        }
+        
+        const confirmSend = confirm(`Found ${inactiveAccounts.length} inactive users. Send re-engagement emails?`);
+        if (!confirmSend) return;
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const account of inactiveAccounts) {
+            try {
+                // Skip if already sent email recently
+                if (account.lastEmailSentAt) {
+                    const lastEmailDate = account.lastEmailSentAt.toDate();
+                    const daysSinceEmail = (Date.now() - lastEmailDate.getTime()) / (24 * 60 * 60 * 1000);
+                    if (daysSinceEmail < 7) {
+                        console.log(`Skipping ${account.email} - email sent ${Math.floor(daysSinceEmail)} days ago`);
+                        continue;
+                    }
+                }
+                
+                await sendEmailViaEmailJS(
+                    account.email,
+                    account.name || account.email,
+                    account.type
+                );
+                
+                // Update lastEmailSentAt timestamp
+                const collectionName = account.type === 'user' ? 'users' : 'coaches';
+                await updateDoc(doc(db, collectionName, account.id), {
+                    lastEmailSentAt: serverTimestamp()
+                });
+                
+                successCount++;
+                
+            } catch (error) {
+                console.error(`Failed to send email to ${account.email}:`, error);
+                failCount++;
+            }
+        }
+        
+        alert(`Emails sent!\nSuccess: ${successCount}\nFailed: ${failCount}`);
+        
+    } catch (error) {
+        console.error('Error sending re-engagement emails:', error);
+        alert('Failed to send emails');
+    }
+}
+
+/**
+ * Send email via EmailJS
+ */
+async function sendEmailViaEmailJS(toEmail, toName, accountType) {
+    const templateParams = {
+        to_email: toEmail,
+        to_name: toName,
+        account_type: accountType,
+        app_name: 'Find My Fit Coach',
+        message: accountType === 'coach' 
+            ? 'We noticed you haven\'t logged in recently. Your clients are waiting for you! Come back and continue helping people achieve their fitness goals.'
+            : 'We noticed you haven\'t logged in recently. Don\'t give up on your fitness journey! Our coaches are ready to help you achieve your goals.'
+    };
+    
+    return emailjs.send(
+        'YOUR_SERVICE_ID', // Replace with your EmailJS service ID
+        'YOUR_TEMPLATE_ID', // Replace with your EmailJS template ID
+        templateParams
+    );
+}
+
+/**
+ * Search users by name or email
+ */
+async function searchUsers(searchTerm) {
+    try {
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+        
+        const allAccounts = [
+            ...usersSnapshot.docs.map(doc => ({ id: doc.id, type: 'user', ...doc.data() })),
+            ...coachesSnapshot.docs.map(doc => ({ id: doc.id, type: 'coach', ...doc.data() }))
+        ];
+        
+        const filtered = allAccounts.filter(account => {
+            const name = (account.name || '').toLowerCase();
+            const email = (account.email || '').toLowerCase();
+            const search = searchTerm.toLowerCase();
+            return name.includes(search) || email.includes(search);
+        });
+        
+        renderUsersList(filtered);
+        
+    } catch (error) {
+        console.error('Error searching users:', error);
+        alert('Failed to search users');
+    }
+}
+
+/**
+ * Render users list
+ */
+function renderUsersList(accounts) {
+    if (!accounts || accounts.length === 0) {
+        usersList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 italic">No users found</p>';
+        return;
+    }
+    
+    usersList.innerHTML = accounts.map(account => {
+        const lastLogin = account.lastLoginAt?.toDate();
+        const lastLoginStr = lastLogin ? lastLogin.toLocaleDateString() : 'Never';
+        const badge = account.type === 'coach' ? 'Coach' : 'User';
+        const badgeColor = account.type === 'coach' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+        
+        return `
+            <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <p class="font-medium text-gray-900 dark:text-gray-100">${account.name || account.email}</p>
+                            <span class="text-xs px-2 py-1 rounded-full ${badgeColor}">${badge}</span>
+                        </div>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">${account.email}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">Last login: ${lastLoginStr}</p>
+                    </div>
+                    <button onclick="sendManualEmail('${account.email}', '${account.name || account.email}')" 
+                        class="px-3 py-1 text-sm rounded-md bg-orange-600 hover:bg-orange-700 text-white">
+                        Email
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Send manual email to specific user
+ */
+window.sendManualEmail = async function(email, name) {
+    const message = prompt(`Enter message to send to ${name}:`);
+    if (!message) return;
+    
+    try {
+        await emailjs.send(
+            'YOUR_SERVICE_ID', // Replace with your EmailJS service ID
+            'YOUR_TEMPLATE_ID', // Replace with your EmailJS template ID
+            {
+                to_email: email,
+                to_name: name,
+                app_name: 'Find My Fit Coach',
+                message: message
+            }
+        );
+        alert('Email sent successfully!');
+    } catch (error) {
+        console.error('Error sending email:', error);
+        alert('Failed to send email');
+    }
+};
+
+/**
+ * Setup admin event listeners
+ */
+function setupAdminEventListeners() {
+    refreshAdminStats?.addEventListener('click', fetchAdminAnalytics);
+    sendEngagementEmails?.addEventListener('click', sendReEngagementEmails);
+    searchUsersBtn?.addEventListener('click', () => {
+        const searchTerm = userSearch.value.trim();
+        if (searchTerm) {
+            searchUsers(searchTerm);
+        }
+    });
+    
+    userSearch?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const searchTerm = userSearch.value.trim();
+            if (searchTerm) {
+                searchUsers(searchTerm);
+            }
+        }
+    });
+    
+    activityFilter?.addEventListener('change', fetchRecentActivity);
+}
+
 
 // Prevent dropdown from closing when clicking inside
 userDropdown?.addEventListener("click", (e) => {
@@ -2970,7 +3431,28 @@ onAuthStateChanged(auth, async (user) => {
         currentUserId = user.uid; // Set global user ID
         console.log('🔑 User authenticated:', user.email, 'UID:', currentUserId);
         
-        if (userType === 'coach') {
+        // Update lastLoginAt for activity tracking
+        await updateLastLogin(user.uid, user.email);
+        
+        if (userType === 'admin') {
+            // Check if user has admin permissions
+            const isAdmin = await checkAdminRole(user.email);
+            if (isAdmin) {
+                console.log('✅ Admin access granted');
+                await fetchAdminAnalytics();
+                setupAdminEventListeners();
+            } else {
+                alert('You do not have admin permissions. Please contact the administrator.');
+                userType = 'user';
+                localStorage.setItem('userType', 'user');
+                await loadUserProfile(user.uid);
+                await Promise.all([
+                    fetchWorkoutsForGoal(goalEl.value),
+                    fetchCoachesForGoal(null),
+                    fetchBookings()
+                ]);
+            }
+        } else if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
             if (coachId) {
                 // Coach profile exists, load bookings
