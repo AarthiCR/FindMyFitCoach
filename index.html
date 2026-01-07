@@ -296,6 +296,195 @@
                 <p id="booking-empty" class="text-sm text-gray-400 hidden">You have no bookings yet.
                 </p>
             </section>
+
+            <!-- Analytics Dashboard -->
+            <section
+                class="neon-border rounded-2xl bg-gradient-to-br from-gray-900 via-slate-900 to-gray-900 p-6 shadow-lg backdrop-blur-sm">
+                <div class="mb-4 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                        </svg>
+                        <h2 class="text-xl font-semibold text-white">Analytics Dashboard</h2>
+                    </div>
+                    <button id="refresh-analytics"
+                        class="rounded-lg border border-cyan-500/30 bg-gray-950/50 px-4 py-2 text-sm font-medium hover:border-cyan-500/60 hover:bg-cyan-500/10 glow-btn">🔄 Refresh</button>
+                </div>
+                
+                <!-- Analytics Loading State -->
+                <div id="analytics-loading" class="text-center py-8">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-400"></div>
+                    <p class="mt-2 text-sm text-gray-400">Loading analytics...</p>
+                </div>
+
+                <!-- Analytics Content -->
+                <div id="analytics-content" class="hidden">
+                    <!-- Key Metrics Cards -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                        <!-- Sessions This Month -->
+                        <div class="bg-gradient-to-br from-blue-900/30 to-blue-800/20 rounded-lg p-4 border border-blue-500/30">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-sm text-blue-300">Sessions This Month</p>
+                                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                </svg>
+                            </div>
+                            <p id="sessions-this-month" class="text-2xl font-bold text-white">0</p>
+                            <p class="text-xs text-blue-400 mt-1" id="sessions-month-change"></p>
+                        </div>
+
+                        <!-- Total Sessions -->
+                        <div class="bg-gradient-to-br from-purple-900/30 to-purple-800/20 rounded-lg p-4 border border-purple-500/30">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-sm text-purple-300">Total Sessions</p>
+                                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                            </div>
+                            <p id="total-sessions" class="text-2xl font-bold text-white">0</p>
+                            <p class="text-xs text-purple-400 mt-1">All time</p>
+                        </div>
+
+                        <!-- Completion Rate -->
+                        <div class="bg-gradient-to-br from-emerald-900/30 to-emerald-800/20 rounded-lg p-4 border border-emerald-500/30">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-sm text-emerald-300">Completion Rate</p>
+                                <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                </svg>
+                            </div>
+                            <p id="completion-rate" class="text-2xl font-bold text-white">0%</p>
+                            <p class="text-xs text-emerald-400 mt-1" id="completion-rate-detail"></p>
+                        </div>
+
+                        <!-- Weekly Average -->
+                        <div class="bg-gradient-to-br from-pink-900/30 to-pink-800/20 rounded-lg p-4 border border-pink-500/30">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-sm text-pink-300">Weekly Average</p>
+                                <svg class="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                                </svg>
+                            </div>
+                            <p id="weekly-average" class="text-2xl font-bold text-white">0</p>
+                            <p class="text-xs text-pink-400 mt-1">Sessions per week</p>
+                        </div>
+                    </div>
+
+                    <!-- Second Row Metrics -->
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                        <!-- Current Streak -->
+                        <div class="bg-gradient-to-br from-orange-900/30 to-amber-800/20 rounded-lg p-3 border border-orange-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">🔥</span>
+                                <p class="text-xs text-orange-300">Streak</p>
+                            </div>
+                            <p id="current-streak" class="text-xl font-bold text-white">0 days</p>
+                        </div>
+
+                        <!-- AI Workouts -->
+                        <div class="bg-gradient-to-br from-cyan-900/30 to-teal-800/20 rounded-lg p-3 border border-cyan-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">🤖</span>
+                                <p class="text-xs text-cyan-300">AI Workouts</p>
+                            </div>
+                            <p id="ai-workouts-count" class="text-xl font-bold text-white">0</p>
+                        </div>
+
+                        <!-- Total Coaches -->
+                        <div class="bg-gradient-to-br from-indigo-900/30 to-violet-800/20 rounded-lg p-3 border border-indigo-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">👥</span>
+                                <p class="text-xs text-indigo-300">Coaches</p>
+                            </div>
+                            <p id="unique-coaches" class="text-xl font-bold text-white">0</p>
+                        </div>
+
+                        <!-- Cancellation Rate -->
+                        <div class="bg-gradient-to-br from-red-900/30 to-rose-800/20 rounded-lg p-3 border border-red-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">📉</span>
+                                <p class="text-xs text-red-300">Cancelled</p>
+                            </div>
+                            <p id="cancellation-rate" class="text-xl font-bold text-white">0%</p>
+                        </div>
+
+                        <!-- Avg Session Duration -->
+                        <div class="bg-gradient-to-br from-lime-900/30 to-green-800/20 rounded-lg p-3 border border-lime-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">⏱️</span>
+                                <p class="text-xs text-lime-300">Avg Duration</p>
+                            </div>
+                            <p id="avg-duration" class="text-xl font-bold text-white">0 min</p>
+                        </div>
+
+                        <!-- Favorite Time -->
+                        <div class="bg-gradient-to-br from-yellow-900/30 to-amber-800/20 rounded-lg p-3 border border-yellow-500/30">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-lg">🌅</span>
+                                <p class="text-xs text-yellow-300">Best Time</p>
+                            </div>
+                            <p id="favorite-time" class="text-xl font-bold text-white">-</p>
+                        </div>
+                    </div>
+
+                    <!-- Charts and Trends -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                        <!-- Monthly Trend -->
+                        <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                            <h3 class="text-lg font-semibold text-white mb-4">Monthly Trend</h3>
+                            <div id="monthly-trend-chart" class="h-48 flex items-end justify-between gap-2">
+                                <!-- Chart bars will be inserted here -->
+                            </div>
+                            <p class="text-xs text-gray-400 mt-2 text-center">Sessions per month</p>
+                        </div>
+
+                        <!-- Weekly Activity -->
+                        <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                            <h3 class="text-lg font-semibold text-white mb-4">Weekly Activity</h3>
+                            <div id="weekly-activity-chart" class="h-48 flex items-end justify-between gap-1">
+                                <!-- Chart bars will be inserted here -->
+                            </div>
+                            <p class="text-xs text-gray-400 mt-2 text-center">Last 7 days</p>
+                        </div>
+                    </div>
+
+                    <!-- Detailed Stats -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Top Coaches -->
+                        <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                            <h3 class="text-lg font-semibold text-white mb-4">Most Booked Coaches</h3>
+                            <div id="top-coaches-list" class="space-y-2">
+                                <!-- Coach list will be inserted here -->
+                            </div>
+                            <p id="top-coaches-empty" class="text-sm text-gray-400 hidden">No coach bookings yet</p>
+                        </div>
+
+                        <!-- Goal Progress -->
+                        <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                            <h3 class="text-lg font-semibold text-white mb-4">Goal Progress</h3>
+                            <div id="goal-progress-content">
+                                <!-- Goal progress will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Activity Summary -->
+                    <div class="mt-6 bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                        <h3 class="text-lg font-semibold text-white mb-4">Activity Summary</h3>
+                        <div id="activity-summary" class="space-y-3">
+                            <!-- Summary items will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analytics Empty State -->
+                <div id="analytics-empty" class="hidden text-center py-8">
+                    <svg class="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                    <p class="text-gray-400">No analytics data available yet. Start booking sessions to see your progress!</p>
+                </div>
+            </section>
             </div>
         </section>
 
@@ -393,6 +582,216 @@
                     <div class="mb-4">
                         <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Coach Dashboard</h2>
                         <p class="text-gray-600 dark:text-gray-400 mt-2">Manage your bookings and schedule</p>
+                    </div>
+                </section>
+
+                <!-- Coach Analytics Dashboard -->
+                <section class="neon-border rounded-2xl bg-gradient-to-br from-purple-950/30 via-indigo-950/20 to-purple-950/30 p-6 shadow-lg backdrop-blur-sm mt-8">
+                    <div class="mb-6 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            <h2 class="text-xl font-semibold text-white">Coach Analytics</h2>
+                        </div>
+                        <button id="refresh-coach-analytics"
+                            class="rounded-lg border border-purple-500/30 bg-gray-950/50 px-4 py-2 text-sm font-medium hover:border-purple-500/60 hover:bg-purple-500/10 glow-btn">🔄 Refresh</button>
+                    </div>
+
+                    <!-- Coach Analytics Loading State -->
+                    <div id="coach-analytics-loading" class="text-center py-8">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-purple-400"></div>
+                        <p class="mt-2 text-sm text-gray-400">Loading your analytics...</p>
+                    </div>
+
+                    <!-- Coach Analytics Content -->
+                    <div id="coach-analytics-content" class="hidden">
+                        <!-- Key Metrics Row -->
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                            <!-- Active Clients -->
+                            <div class="bg-gradient-to-br from-blue-900/40 to-blue-800/20 rounded-lg p-4 border border-blue-500/30">
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-sm text-blue-300">Active Clients</p>
+                                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    </svg>
+                                </div>
+                                <p id="coach-active-clients" class="text-2xl font-bold text-white">0</p>
+                                <p class="text-xs text-blue-400 mt-1" id="coach-new-clients">+0 this month</p>
+                            </div>
+
+                            <!-- Sessions This Month -->
+                            <div class="bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 rounded-lg p-4 border border-emerald-500/30">
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-sm text-emerald-300">Sessions This Month</p>
+                                    <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    </svg>
+                                </div>
+                                <p id="coach-sessions-month" class="text-2xl font-bold text-white">0</p>
+                                <p class="text-xs text-emerald-400 mt-1" id="coach-sessions-change"></p>
+                            </div>
+
+                            <!-- Revenue This Month -->
+                            <div class="bg-gradient-to-br from-yellow-900/40 to-amber-800/20 rounded-lg p-4 border border-yellow-500/30">
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-sm text-yellow-300">Revenue This Month</p>
+                                    <svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                </div>
+                                <p id="coach-revenue-month" class="text-2xl font-bold text-white">₹0</p>
+                                <p class="text-xs text-yellow-400 mt-1" id="coach-revenue-change"></p>
+                            </div>
+
+                            <!-- Avg Completion Rate -->
+                            <div class="bg-gradient-to-br from-pink-900/40 to-rose-800/20 rounded-lg p-4 border border-pink-500/30">
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-sm text-pink-300">Avg Completion</p>
+                                    <svg class="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                </div>
+                                <p id="coach-avg-completion" class="text-2xl font-bold text-white">0%</p>
+                                <p class="text-xs text-pink-400 mt-1">Across all sessions</p>
+                            </div>
+                        </div>
+
+                        <!-- Second Row Metrics (Coach) -->
+                        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                            <!-- Total Revenue -->
+                            <div class="bg-gradient-to-br from-amber-900/40 to-yellow-800/20 rounded-lg p-3 border border-amber-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">💎</span>
+                                    <p class="text-xs text-amber-300">Lifetime Revenue</p>
+                                </div>
+                                <p id="coach-total-revenue" class="text-xl font-bold text-white">₹0</p>
+                            </div>
+
+                            <!-- Client Retention -->
+                            <div class="bg-gradient-to-br from-teal-900/40 to-cyan-800/20 rounded-lg p-3 border border-teal-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">🔄</span>
+                                    <p class="text-xs text-teal-300">Retention</p>
+                                </div>
+                                <p id="coach-retention-rate" class="text-xl font-bold text-white">0%</p>
+                            </div>
+
+                            <!-- Avg Sessions/Client -->
+                            <div class="bg-gradient-to-br from-violet-900/40 to-purple-800/20 rounded-lg p-3 border border-violet-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">📊</span>
+                                    <p class="text-xs text-violet-300">Sessions/Client</p>
+                                </div>
+                                <p id="coach-avg-sessions" class="text-xl font-bold text-white">0</p>
+                            </div>
+
+                            <!-- Cancellation Rate -->
+                            <div class="bg-gradient-to-br from-red-900/40 to-rose-800/20 rounded-lg p-3 border border-red-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">❌</span>
+                                    <p class="text-xs text-red-300">Cancelled</p>
+                                </div>
+                                <p id="coach-cancellation-rate" class="text-xl font-bold text-white">0%</p>
+                            </div>
+
+                            <!-- Peak Hour -->
+                            <div class="bg-gradient-to-br from-orange-900/40 to-amber-800/20 rounded-lg p-3 border border-orange-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">⏰</span>
+                                    <p class="text-xs text-orange-300">Peak Hour</p>
+                                </div>
+                                <p id="coach-peak-hour" class="text-xl font-bold text-white">-</p>
+                            </div>
+
+                            <!-- Growth Rate -->
+                            <div class="bg-gradient-to-br from-lime-900/40 to-green-800/20 rounded-lg p-3 border border-lime-500/30">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">📈</span>
+                                    <p class="text-xs text-lime-300">Growth</p>
+                                </div>
+                                <p id="coach-growth-rate" class="text-xl font-bold text-white">0%</p>
+                            </div>
+                        </div>
+
+                        <!-- Charts Row -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                            <!-- Revenue Trend -->
+                            <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                    <span class="text-yellow-400">💰</span> Revenue Trend
+                                </h3>
+                                <div id="coach-revenue-chart" class="h-40 flex items-end justify-between gap-2">
+                                    <!-- Chart bars will be inserted here -->
+                                </div>
+                                <p class="text-xs text-gray-400 mt-2 text-center">Last 6 months</p>
+                            </div>
+
+                            <!-- Sessions Per Day -->
+                            <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                    <span class="text-emerald-400">📅</span> This Week's Sessions
+                                </h3>
+                                <div id="coach-weekly-chart" class="h-40 flex items-end justify-between gap-1">
+                                    <!-- Chart bars will be inserted here -->
+                                </div>
+                                <p class="text-xs text-gray-400 mt-2 text-center">Sessions by day</p>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Row -->
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <!-- Top Clients -->
+                            <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                    <span class="text-blue-400">⭐</span> Top Clients
+                                </h3>
+                                <div id="coach-top-clients" class="space-y-3">
+                                    <!-- Client list will be inserted here -->
+                                </div>
+                                <p id="coach-top-clients-empty" class="text-sm text-gray-400 hidden">No clients yet</p>
+                            </div>
+
+                            <!-- Client Goals Distribution -->
+                            <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                    <span class="text-purple-400">🎯</span> Client Goals
+                                </h3>
+                                <div id="coach-goals-distribution" class="space-y-3">
+                                    <!-- Goals distribution will be inserted here -->
+                                </div>
+                            </div>
+
+                            <!-- Performance Summary -->
+                            <div class="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                    <span class="text-orange-400">📊</span> Performance
+                                </h3>
+                                <div id="coach-performance-summary" class="space-y-3">
+                                    <!-- Performance metrics will be inserted here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Clients Needing Attention -->
+                        <div class="mt-6 bg-gradient-to-r from-red-950/30 to-orange-950/30 rounded-lg p-4 border border-red-500/20">
+                            <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                                <span class="text-red-400">⚠️</span> Clients Needing Attention
+                                <span id="attention-count" class="text-xs bg-red-500/30 text-red-300 px-2 py-1 rounded-full">0</span>
+                            </h3>
+                            <div id="coach-attention-clients" class="space-y-2">
+                                <!-- Clients needing attention will be inserted here -->
+                            </div>
+                            <p id="coach-attention-empty" class="text-sm text-gray-400 hidden">All clients are doing great! 🎉</p>
+                        </div>
+                    </div>
+
+                    <!-- Coach Analytics Empty State -->
+                    <div id="coach-analytics-empty" class="hidden text-center py-8">
+                        <svg class="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                        </svg>
+                        <p class="text-gray-400">No analytics data yet. Complete sessions with clients to see your stats!</p>
                     </div>
                 </section>
 

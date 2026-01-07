@@ -1,0 +1,17 @@
+{
+  "name": "findmyfitcoach-test-data",
+  "version": "1.0.0",
+  "description": "Test data seeder for FindMyFitCoach using Firebase Admin SDK",
+  "type": "module",
+  "scripts": {
+    "seed": "node seed.js",
+    "seed:user": "node seed.js --user-only",
+    "seed:coach": "node seed.js --coach-only",
+    "clear": "node seed.js --clear",
+    "help": "node seed.js --help"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
+

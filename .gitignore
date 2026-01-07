@@ -13,6 +13,11 @@ firebase-debug.*.log*
 # Configuration files with API keys
 config/config.js
 
+# Firebase Service Account (sensitive - never commit!)
+service-account.json
+**/service-account.json
+test-data/service-account.json
+
 # Firebase config
 
 # Uncomment this if you'd like others to create their own Firebase project.
