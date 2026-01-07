@@ -7,7 +7,10 @@ import {
     signInWithRedirect,
     getRedirectResult,
     signOut,
-    onAuthStateChanged
+    onAuthStateChanged,
+    signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
+    updateProfile
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
     getFirestore,
@@ -54,6 +57,7 @@ const cancelEditProfileBtn = document.getElementById("cancel-edit-profile");
 const profileSection = document.getElementById("profile-section");
 const mainContent = document.getElementById("main-content");
 
+<<<<<<< HEAD
 // Auth gate buttons
 const btnUserLogin = document.getElementById("btn-user-login");
 const btnCoachLogin = document.getElementById("btn-coach-login");
@@ -90,6 +94,40 @@ const refreshCoachesList = document.getElementById("refresh-coaches-list");
 const coachFilter = document.getElementById("coach-filter");
 const coachesList = document.getElementById("coaches-list");
 const coachApprovalStatus = document.getElementById("coach-approval-status");
+
+// Auth gate elements - Account type selection
+const accountTypeSelection = document.getElementById("account-type-selection");
+const loginOptions = document.getElementById("login-options");
+const btnSelectUser = document.getElementById("btn-select-user");
+const btnSelectCoach = document.getElementById("btn-select-coach");
+const btnChangeType = document.getElementById("btn-change-type");
+const selectedTypeIcon = document.getElementById("selected-type-icon");
+const selectedTypeText = document.getElementById("selected-type-text");
+
+// Auth gate elements - Auth method tabs
+const tabGoogle = document.getElementById("tab-google");
+const tabEmail = document.getElementById("tab-email");
+const panelGoogle = document.getElementById("panel-google");
+const panelEmail = document.getElementById("panel-email");
+const btnGoogleSignin = document.getElementById("btn-google-signin");
+
+// Auth gate elements - Email/Password forms
+const btnShowLogin = document.getElementById("btn-show-login");
+const btnShowSignup = document.getElementById("btn-show-signup");
+const emailLoginForm = document.getElementById("email-login-form");
+const emailSignupForm = document.getElementById("email-signup-form");
+const loginEmail = document.getElementById("login-email");
+const loginPassword = document.getElementById("login-password");
+const loginError = document.getElementById("login-error");
+const signupName = document.getElementById("signup-name");
+const signupEmail = document.getElementById("signup-email");
+const signupPassword = document.getElementById("signup-password");
+const signupPasswordConfirm = document.getElementById("signup-password-confirm");
+const signupError = document.getElementById("signup-error");
+
+// Legacy button references (for backward compatibility if needed)
+const btnUserLogin = btnSelectUser;
+const btnCoachLogin = btnSelectCoach;
 
 // Restore userType from localStorage on page load
 let userType = localStorage.getItem('userType') || null; // 'user', 'coach', or 'admin'
@@ -3784,25 +3822,116 @@ bookingConfirmBtn.addEventListener("click", async () => {
     }
 });
 
-// Auth handlers
-btnUserLogin.addEventListener("click", () => {
-    userType = 'user';
-    localStorage.setItem('userType', 'user');
-    signInUser();
-});
+// ============================================
+// AUTH HANDLERS - Account Type Selection
+// ============================================
 
-btnCoachLogin.addEventListener("click", () => {
-    userType = 'coach';
-    localStorage.setItem('userType', 'coach');
-    signInUser();
-});
+function showLoginOptions(type) {
+    userType = type;
+    localStorage.setItem('userType', type);
+    
+    // Update UI indicator
+    if (type === 'user') {
+        selectedTypeIcon.textContent = '💪';
+        selectedTypeText.textContent = 'Signing in as User';
+    } else {
+        selectedTypeIcon.textContent = '🏋️';
+        selectedTypeText.textContent = 'Signing in as Coach';
+    }
+    
+    // Show login options, hide type selection
+    accountTypeSelection.classList.add('hidden');
+    loginOptions.classList.remove('hidden');
+}
+
+function hideLoginOptions() {
+    loginOptions.classList.add('hidden');
+    accountTypeSelection.classList.remove('hidden');
+    // Reset to Google tab
+    showGooglePanel();
+    // Clear forms
+    clearAuthForms();
+}
+
+function clearAuthForms() {
+    if (loginEmail) loginEmail.value = '';
+    if (loginPassword) loginPassword.value = '';
+    if (signupName) signupName.value = '';
+    if (signupEmail) signupEmail.value = '';
+    if (signupPassword) signupPassword.value = '';
+    if (signupPasswordConfirm) signupPasswordConfirm.value = '';
+    if (loginError) loginError.classList.add('hidden');
+    if (signupError) signupError.classList.add('hidden');
+}
+
+function showGooglePanel() {
+    tabGoogle.classList.add('border-cyan-500', 'text-cyan-400');
+    tabGoogle.classList.remove('border-transparent', 'text-gray-400');
+    tabEmail.classList.remove('border-cyan-500', 'text-cyan-400');
+    tabEmail.classList.add('border-transparent', 'text-gray-400');
+    panelGoogle.classList.remove('hidden');
+    panelEmail.classList.add('hidden');
+}
+
+function showEmailPanel() {
+    tabEmail.classList.add('border-cyan-500', 'text-cyan-400');
+    tabEmail.classList.remove('border-transparent', 'text-gray-400');
+    tabGoogle.classList.remove('border-cyan-500', 'text-cyan-400');
+    tabGoogle.classList.add('border-transparent', 'text-gray-400');
+    panelEmail.classList.remove('hidden');
+    panelGoogle.classList.add('hidden');
+}
+
+function showLoginForm() {
+    emailLoginForm.classList.remove('hidden');
+    emailSignupForm.classList.add('hidden');
+    btnShowLogin.classList.add('bg-cyan-500/20', 'text-cyan-400', 'border-cyan-500/30');
+    btnShowLogin.classList.remove('text-gray-400', 'border-transparent');
+    btnShowSignup.classList.remove('bg-cyan-500/20', 'text-cyan-400', 'border-cyan-500/30');
+    btnShowSignup.classList.add('text-gray-400', 'border-transparent');
+}
+
+function showSignupForm() {
+    emailSignupForm.classList.remove('hidden');
+    emailLoginForm.classList.add('hidden');
+    btnShowSignup.classList.add('bg-cyan-500/20', 'text-cyan-400', 'border-cyan-500/30');
+    btnShowSignup.classList.remove('text-gray-400', 'border-transparent');
+    btnShowLogin.classList.remove('bg-cyan-500/20', 'text-cyan-400', 'border-cyan-500/30');
+    btnShowLogin.classList.add('text-gray-400', 'border-transparent');
+}
+
+function showAuthError(element, message) {
+    if (element) {
+        element.textContent = message;
+        element.classList.remove('hidden');
+    }
+}
+
+// Account type selection
+btnSelectUser?.addEventListener("click", () => showLoginOptions('user'));
+btnSelectCoach?.addEventListener("click", () => showLoginOptions('coach'));
+btnChangeType?.addEventListener("click", hideLoginOptions);
+
+// Auth method tabs
+tabGoogle?.addEventListener("click", showGooglePanel);
+tabEmail?.addEventListener("click", showEmailPanel);
+
+// Login/Signup toggle
+btnShowLogin?.addEventListener("click", showLoginForm);
+btnShowSignup?.addEventListener("click", showSignupForm);
 
 btnAdminAccess.addEventListener("click", () => {
     openAdminAccessModal();
 });
 
-async function signInUser() {
-    console.log(`Sign in as ${userType} clicked`);
+// ============================================
+// GOOGLE SIGN-IN
+// ============================================
+
+btnGoogleSignin?.addEventListener("click", signInWithGoogle);
+
+async function signInWithGoogle() {
+    console.log(`Google sign-in as ${userType} clicked`);
     const provider = new GoogleAuthProvider();
     
     try {
@@ -3834,6 +3963,141 @@ getRedirectResult(auth)
         console.error('Redirect sign-in error:', error);
         alert(`Redirect sign-in failed: ${error.message}`);
     });
+
+// ============================================
+// EMAIL/PASSWORD SIGN-IN
+// ============================================
+
+emailLoginForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const email = loginEmail.value.trim();
+    const password = loginPassword.value;
+    
+    if (!email || !password) {
+        showAuthError(loginError, 'Please enter both email and password');
+        return;
+    }
+    
+    // Show loading state
+    const submitBtn = emailLoginForm.querySelector('button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Signing in...';
+    loginError.classList.add('hidden');
+    
+    try {
+        console.log(`Email sign-in as ${userType} with: ${email}`);
+        const result = await signInWithEmailAndPassword(auth, email, password);
+        console.log('Email sign-in successful:', result.user);
+        clearAuthForms();
+    } catch (error) {
+        console.error('Email sign-in error:', error.code, error.message);
+        
+        let errorMessage = 'Sign-in failed. Please try again.';
+        switch (error.code) {
+            case 'auth/user-not-found':
+                errorMessage = 'No account found with this email. Please sign up first.';
+                break;
+            case 'auth/wrong-password':
+                errorMessage = 'Incorrect password. Please try again.';
+                break;
+            case 'auth/invalid-email':
+                errorMessage = 'Invalid email address format.';
+                break;
+            case 'auth/user-disabled':
+                errorMessage = 'This account has been disabled.';
+                break;
+            case 'auth/too-many-requests':
+                errorMessage = 'Too many failed attempts. Please try again later.';
+                break;
+            case 'auth/invalid-credential':
+                errorMessage = 'Invalid email or password. Please check and try again.';
+                break;
+        }
+        showAuthError(loginError, errorMessage);
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+    }
+});
+
+// ============================================
+// EMAIL/PASSWORD SIGN-UP
+// ============================================
+
+emailSignupForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const name = signupName.value.trim();
+    const email = signupEmail.value.trim();
+    const password = signupPassword.value;
+    const confirmPassword = signupPasswordConfirm.value;
+    
+    // Validation
+    if (!name || !email || !password || !confirmPassword) {
+        showAuthError(signupError, 'Please fill in all fields');
+        return;
+    }
+    
+    if (password !== confirmPassword) {
+        showAuthError(signupError, 'Passwords do not match');
+        return;
+    }
+    
+    if (password.length < 6) {
+        showAuthError(signupError, 'Password must be at least 6 characters');
+        return;
+    }
+    
+    // Show loading state
+    const submitBtn = emailSignupForm.querySelector('button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating account...';
+    signupError.classList.add('hidden');
+    
+    try {
+        console.log(`Creating account as ${userType} for: ${email}`);
+        const result = await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Update the user's display name
+        await updateProfile(result.user, {
+            displayName: name
+        });
+        
+        console.log('Account created successfully:', result.user);
+        clearAuthForms();
+        
+    } catch (error) {
+        console.error('Sign-up error:', error.code, error.message);
+        
+        let errorMessage = 'Account creation failed. Please try again.';
+        switch (error.code) {
+            case 'auth/email-already-in-use':
+                errorMessage = 'An account with this email already exists. Please sign in instead.';
+                break;
+            case 'auth/invalid-email':
+                errorMessage = 'Invalid email address format.';
+                break;
+            case 'auth/weak-password':
+                errorMessage = 'Password is too weak. Please use a stronger password.';
+                break;
+            case 'auth/operation-not-allowed':
+                errorMessage = 'Email/password accounts are not enabled. Please contact support.';
+                break;
+        }
+        showAuthError(signupError, errorMessage);
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+    }
+});
+
+// Legacy function for backwards compatibility
+async function signInUser() {
+    await signInWithGoogle();
+}
 
 btnSignOut.addEventListener("click", async () => {
     await signOut(auth);
