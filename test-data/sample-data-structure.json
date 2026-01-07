@@ -1,0 +1,281 @@
+{
+  "_description": "Sample data structures for FindMyFitCoach Analytics testing",
+  "_usage": "Use these structures to manually add test data via Firebase Console or import programmatically",
+  
+  "collections": {
+    "users": {
+      "_path": "users/{userId}",
+      "_description": "User profile - affects Goal Progress display",
+      "sample": {
+        "uid": "USER_ID_HERE",
+        "name": "Test User",
+        "email": "testuser@example.com",
+        "heightCm": 175,
+        "weightKg": 75,
+        "goal": "weight_loss",
+        "requirements": "Home workouts only, no heavy equipment",
+        "createdAt": "TIMESTAMP",
+        "updatedAt": "TIMESTAMP"
+      },
+      "_goalOptions": ["weight_loss", "muscle_gain", "endurance", "general_fitness"]
+    },
+    
+    "coaches": {
+      "_path": "coaches/{coachId}",
+      "_description": "Coach profiles - names appear in Top Coaches list",
+      "samples": [
+        {
+          "_docId": "coach-1",
+          "name": "Sarah Johnson",
+          "email": "sarah@coach.com",
+          "bio": "8 years experience in weight loss coaching",
+          "specializations": ["weight_loss", "hiit", "general_fitness"],
+          "yearsExperience": 8,
+          "hourlyRate": 2500,
+          "rating": 4.9
+        },
+        {
+          "_docId": "coach-2",
+          "name": "Mike Chen",
+          "email": "mike@coach.com",
+          "bio": "Strength and muscle building specialist",
+          "specializations": ["muscle_gain", "crossfit"],
+          "yearsExperience": 6,
+          "hourlyRate": 2000,
+          "rating": 4.7
+        }
+      ]
+    },
+    
+    "bookings": {
+      "_path": "bookings/{bookingId}",
+      "_description": "Session bookings - core data for most analytics metrics",
+      "_analyticsUsage": [
+        "Sessions This Month - counts bookings with status='completed' in current month",
+        "Total Sessions - counts all bookings with status='completed'",
+        "Completion Rate - (completed / total bookings) * 100",
+        "Weekly Average - completed bookings in last 4 weeks / 4",
+        "Monthly Trend - completed bookings grouped by month (last 6 months)",
+        "Weekly Activity - bookings per day (last 7 days)",
+        "Top Coaches - grouped by coachName, sorted by count"
+      ],
+      "samples": [
+        {
+          "_docId": "booking-1",
+          "_note": "Completed booking - counts toward analytics",
+          "userId": "USER_ID_HERE",
+          "userEmail": "testuser@example.com",
+          "userName": "Test User",
+          "coachId": "coach-1",
+          "coachName": "Sarah Johnson",
+          "coachEmail": "sarah@coach.com",
+          "goal": "weight_loss",
+          "status": "completed",
+          "scheduledAt": "2026-01-05T10:00:00Z",
+          "createdAt": "2026-01-04T15:30:00Z",
+          "meetingId": "meeting-abc123",
+          "meetingLink": "https://meet.jit.si/meeting-abc123"
+        },
+        {
+          "_docId": "booking-2",
+          "_note": "Pending booking - shows in bookings but affects completion rate",
+          "userId": "USER_ID_HERE",
+          "userEmail": "testuser@example.com",
+          "userName": "Test User",
+          "coachId": "coach-2",
+          "coachName": "Mike Chen",
+          "coachEmail": "mike@coach.com",
+          "goal": "muscle_gain",
+          "status": "pending",
+          "scheduledAt": "2026-01-10T14:00:00Z",
+          "createdAt": "2026-01-07T09:00:00Z",
+          "meetingId": "meeting-def456",
+          "meetingLink": "https://meet.jit.si/meeting-def456"
+        },
+        {
+          "_docId": "booking-3",
+          "_note": "Cancelled booking - affects completion rate negatively",
+          "userId": "USER_ID_HERE",
+          "userEmail": "testuser@example.com",
+          "userName": "Test User",
+          "coachId": "coach-1",
+          "coachName": "Sarah Johnson",
+          "coachEmail": "sarah@coach.com",
+          "goal": "weight_loss",
+          "status": "cancelled",
+          "scheduledAt": "2026-01-03T11:00:00Z",
+          "createdAt": "2026-01-01T08:00:00Z",
+          "meetingId": "meeting-ghi789",
+          "meetingLink": "https://meet.jit.si/meeting-ghi789"
+        }
+      ],
+      "_statusOptions": ["pending", "confirmed", "active", "completed", "cancelled"]
+    },
+    
+    "ai_workouts": {
+      "_path": "ai_workouts/{workoutId}",
+      "_description": "AI-generated workout plans",
+      "_analyticsUsage": [
+        "AI Workouts Count - total count displayed in Activity Summary",
+        "Weekly Activity - combined with bookings for daily activity",
+        "Monthly Trend - combined with sessions for monthly chart",
+        "Goal Progress - counts toward total activities"
+      ],
+      "samples": [
+        {
+          "_docId": "ai-workout-1",
+          "userId": "USER_ID_HERE",
+          "workout": {
+            "title": "High Intensity Fat Burner",
+            "duration": 30,
+            "intensity": "high",
+            "estimatedCalories": 350,
+            "exercises": [
+              {"name": "Burpees", "sets": 3, "reps": "10-12", "notes": "Land softly"},
+              {"name": "Mountain Climbers", "sets": 3, "reps": "20", "notes": "Keep core tight"},
+              {"name": "Jump Squats", "sets": 4, "reps": "15", "notes": "Full depth"}
+            ],
+            "warmup": {
+              "description": "5 minutes dynamic stretching",
+              "checklistItems": ["Arm circles", "Leg swings", "Hip rotations"]
+            },
+            "cooldown": {
+              "description": "5 minutes static stretching",
+              "checklistItems": ["Quad stretch", "Hamstring stretch"]
+            },
+            "equipmentNeeded": ["Yoga mat"],
+            "aiReasoning": "This HIIT workout targets fat burning for your weight loss goal."
+          },
+          "createdAt": "2026-01-06T08:30:00Z"
+        },
+        {
+          "_docId": "ai-workout-2",
+          "userId": "USER_ID_HERE",
+          "workout": {
+            "title": "Strength Builder",
+            "duration": 45,
+            "intensity": "moderate",
+            "estimatedCalories": 280,
+            "exercises": [
+              {"name": "Push-ups", "sets": 4, "reps": "12-15", "notes": "Chest to ground"},
+              {"name": "Dumbbell Rows", "sets": 3, "reps": "10", "notes": "Squeeze at top"},
+              {"name": "Lunges", "sets": 3, "reps": "12 each leg", "notes": "Keep torso upright"}
+            ],
+            "warmup": {
+              "description": "Dynamic warmup",
+              "checklistItems": ["Light jog", "Arm swings"]
+            },
+            "cooldown": {
+              "description": "Cool down stretches",
+              "checklistItems": ["Full body stretch"]
+            },
+            "equipmentNeeded": ["Dumbbells", "Yoga mat"],
+            "aiReasoning": "Building foundational strength with compound movements."
+          },
+          "createdAt": "2026-01-04T14:00:00Z"
+        }
+      ]
+    },
+    
+    "workoutSessions": {
+      "_path": "workoutSessions/{sessionId}",
+      "_description": "Completed workout sessions from video calls with coaches",
+      "_analyticsUsage": [
+        "Used for detailed session tracking",
+        "Completion rate per session shown in Activity Summary"
+      ],
+      "samples": [
+        {
+          "_docId": "session-1",
+          "bookingId": "booking-1",
+          "userId": "USER_ID_HERE",
+          "userName": "Test User",
+          "userEmail": "testuser@example.com",
+          "coachId": "coach-1",
+          "coachName": "Sarah Johnson",
+          "goal": "weight_loss",
+          "totalItems": 6,
+          "completedItems": 5,
+          "allExercises": [
+            {"exercise": "Warm-up: Dynamic stretching", "completed": true},
+            {"exercise": "Squats - 3 sets", "completed": true},
+            {"exercise": "Push-ups - 3 sets", "completed": true},
+            {"exercise": "Lunges - 3 sets", "completed": true},
+            {"exercise": "Plank - 3 sets", "completed": true},
+            {"exercise": "Cool-down stretches", "completed": false}
+          ],
+          "coachNotes": "Great session! Form improved significantly. Focus on breathing during heavy lifts.",
+          "completedAt": "2026-01-05T11:00:00Z"
+        }
+      ]
+    }
+  },
+  
+  "testingChecklist": {
+    "_description": "Use this checklist to verify all analytics components work",
+    "metricsToTest": [
+      {
+        "component": "Sessions This Month",
+        "howToTest": "Add 3+ bookings with status='completed' and scheduledAt in current month",
+        "expectedResult": "Shows count of completed sessions this month + comparison to last month"
+      },
+      {
+        "component": "Total Sessions",
+        "howToTest": "Add multiple completed bookings across different months",
+        "expectedResult": "Shows total count of all completed bookings"
+      },
+      {
+        "component": "Completion Rate",
+        "howToTest": "Add mix of completed/cancelled/pending bookings",
+        "expectedResult": "Shows percentage: (completed / total) * 100"
+      },
+      {
+        "component": "Weekly Average",
+        "howToTest": "Add bookings spread across last 4 weeks",
+        "expectedResult": "Shows average sessions per week"
+      },
+      {
+        "component": "Monthly Trend Chart",
+        "howToTest": "Add bookings and AI workouts across last 6 months",
+        "expectedResult": "Bar chart showing monthly totals"
+      },
+      {
+        "component": "Weekly Activity Chart",
+        "howToTest": "Add bookings and AI workouts in last 7 days",
+        "expectedResult": "Bar chart with daily activity, today highlighted"
+      },
+      {
+        "component": "Top Coaches",
+        "howToTest": "Add multiple completed bookings with different coaches",
+        "expectedResult": "Ranked list of coaches by booking count"
+      },
+      {
+        "component": "Goal Progress",
+        "howToTest": "Set user goal in profile, add activities",
+        "expectedResult": "Progress bar toward goal milestone"
+      },
+      {
+        "component": "Activity Streak",
+        "howToTest": "Add consecutive days of activity (bookings or AI workouts)",
+        "expectedResult": "Shows current streak count"
+      },
+      {
+        "component": "AI Workouts Count",
+        "howToTest": "Generate or add AI workout documents",
+        "expectedResult": "Total count in Activity Summary"
+      },
+      {
+        "component": "Recent Activity",
+        "howToTest": "Add recent bookings and AI workouts",
+        "expectedResult": "List of last 5 activities with icons and timestamps"
+      }
+    ]
+  },
+  
+  "dateFormats": {
+    "_note": "When adding via Firebase Console, use Timestamp type",
+    "isoFormat": "2026-01-07T10:30:00Z",
+    "firestoreTimestamp": "Use firebase.firestore.Timestamp.fromDate(new Date('2026-01-07T10:30:00Z'))"
+  }
+}
+

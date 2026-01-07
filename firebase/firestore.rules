@@ -3,18 +3,28 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
+    // Helper function to check if document ID is for test data
+    function isTestData(docId) {
+      return docId.matches('test-.*');
+    }
+    
     // Users collection - users can read/write their own profile
+    // Allow test data creation for development
     match /users/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && 
+                   (request.auth.uid == userId || isTestData(userId));
     }
     
     // Coaches collection - authenticated users can read all coaches
     // Only authenticated users can create/update their own coach profile
+    // Allow test data creation for development
     match /coaches/{coachId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null && request.resource.data.email == request.auth.token.email;
-      allow update, delete: if request.auth != null && resource.data.email == request.auth.token.email;
+      allow create: if request.auth != null && 
+                    (request.resource.data.email == request.auth.token.email || isTestData(coachId));
+      allow update, delete: if request.auth != null && 
+                            (resource.data.email == request.auth.token.email || isTestData(coachId));
     }
     
     // Workouts collection - users can read/write their own workouts
@@ -27,17 +37,22 @@ service cloud.firestore {
     // AI workouts collection - users can read/write their own AI-generated workouts
     match /ai_workouts/{workoutId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && 
+                    (request.resource.data.userId == request.auth.uid || isTestData(workoutId));
+      allow update, delete: if request.auth != null && 
+                            (resource.data.userId == request.auth.uid || isTestData(workoutId));
     }
     
     // Bookings collection - users can manage their bookings, coaches can read bookings for them
+    // Allow test data creation for development
     match /bookings/{bookingId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && 
+                    (request.resource.data.userId == request.auth.uid || isTestData(bookingId));
       allow update, delete: if request.auth != null && 
                             (resource.data.userId == request.auth.uid || 
-                             resource.data.coachEmail == request.auth.token.email);
+                             resource.data.coachEmail == request.auth.token.email ||
+                             isTestData(bookingId));
     }
     
     // Notifications collection - users can create, coaches can read/update their notifications
@@ -50,12 +65,14 @@ service cloud.firestore {
     
     // Workout Sessions collection - track completed workout sessions during video calls
     // Coaches can create sessions for their users, users/coaches can read sessions they're involved in
+    // Allow test data creation for development
     match /workoutSessions/{sessionId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
       allow update, delete: if request.auth != null && 
                             (resource.data.userId == request.auth.uid || 
-                             resource.data.coachId == request.auth.uid);
+                             resource.data.coachId == request.auth.uid ||
+                             isTestData(sessionId));
     }
     
     // Active Workout Sessions collection - real-time sync during video calls

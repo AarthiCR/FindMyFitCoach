@@ -115,6 +115,12 @@ const bookingList = document.getElementById("booking-list");
 const bookingEmpty = document.getElementById("booking-empty");
 const refreshBookings = document.getElementById("refresh-bookings");
 
+// Analytics elements
+const refreshAnalytics = document.getElementById("refresh-analytics");
+const analyticsLoading = document.getElementById("analytics-loading");
+const analyticsContent = document.getElementById("analytics-content");
+const analyticsEmpty = document.getElementById("analytics-empty");
+
 // Coach elements
 const coachMenu = document.getElementById("coach-menu");
 const coachDisplayEl = document.getElementById("coach-display");
@@ -1967,6 +1973,1257 @@ async function fetchBookings() {
     });
 }
 
+// ============================================
+// ANALYTICS FUNCTIONS
+// ============================================
+
+/**
+ * Show analytics loading state
+ */
+function showAnalyticsLoading() {
+    if (analyticsLoading) analyticsLoading.classList.remove('hidden');
+    if (analyticsContent) analyticsContent.classList.add('hidden');
+    if (analyticsEmpty) analyticsEmpty.classList.add('hidden');
+}
+
+/**
+ * Show analytics empty state
+ */
+function showAnalyticsEmpty() {
+    if (analyticsLoading) analyticsLoading.classList.add('hidden');
+    if (analyticsContent) analyticsContent.classList.add('hidden');
+    if (analyticsEmpty) analyticsEmpty.classList.remove('hidden');
+}
+
+/**
+ * Load and display user analytics data
+ */
+async function loadAnalytics() {
+    const user = auth.currentUser;
+    if (!user) {
+        showAnalyticsEmpty();
+        return;
+    }
+
+    showAnalyticsLoading();
+
+    try {
+        // Fetch all booking data for this user
+        const bookingsQuery = query(
+            collection(db, "bookings"),
+            where("userId", "==", user.uid),
+            orderBy("createdAt", "desc")
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const allBookings = bookingsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Fetch workout sessions (completed sessions with coach)
+        const sessionsQuery = query(
+            collection(db, "workoutSessions"),
+            where("userId", "==", user.uid),
+            orderBy("completedAt", "desc")
+        );
+        const sessionsSnap = await getDocs(sessionsQuery);
+        const allSessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Fetch AI generated workouts
+        const aiWorkoutsQuery = query(
+            collection(db, "ai_workouts"),
+            where("userId", "==", user.uid),
+            orderBy("createdAt", "desc")
+        );
+        const aiWorkoutsSnap = await getDocs(aiWorkoutsQuery);
+        const allAiWorkouts = aiWorkoutsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Get user profile for goal progress
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+        const userProfile = userSnap.exists() ? userSnap.data() : null;
+
+        // Calculate and render analytics
+        const analyticsData = calculateAnalytics(allBookings, allSessions, allAiWorkouts, userProfile);
+        renderAnalytics(analyticsData);
+
+    } catch (error) {
+        console.error('Failed to load analytics:', error);
+        showAnalyticsEmpty();
+    }
+}
+
+/**
+ * Calculate analytics metrics from raw data
+ */
+function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    // Filter completed/active sessions
+    const completedBookings = bookings.filter(b => b.status === 'completed');
+    const cancelledBookings = bookings.filter(b => b.status === 'cancelled');
+
+    // Sessions this month
+    const sessionsThisMonth = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+
+    // Sessions last month (for comparison)
+    const lastMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+    const lastMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+    const sessionsLastMonth = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date.getMonth() === lastMonth && date.getFullYear() === lastMonthYear;
+    });
+
+    // Monthly change calculation
+    const monthlyChange = sessionsLastMonth.length > 0
+        ? Math.round(((sessionsThisMonth.length - sessionsLastMonth.length) / sessionsLastMonth.length) * 100)
+        : (sessionsThisMonth.length > 0 ? 100 : 0);
+
+    // Total sessions
+    const totalSessions = completedBookings.length;
+
+    // Completion rate
+    const totalBookings = bookings.length;
+    const completionRate = totalBookings > 0 
+        ? Math.round((completedBookings.length / totalBookings) * 100) 
+        : 0;
+
+    // Weekly average (over last 4 weeks)
+    const fourWeeksAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
+    const recentSessions = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date >= fourWeeksAgo;
+    });
+    const weeklyAverage = (recentSessions.length / 4).toFixed(1);
+
+    // Monthly trend (last 6 months)
+    const monthlyTrend = [];
+    for (let i = 5; i >= 0; i--) {
+        const targetMonth = new Date(currentYear, currentMonth - i, 1);
+        const monthSessions = completedBookings.filter(b => {
+            const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+            return date.getMonth() === targetMonth.getMonth() && 
+                   date.getFullYear() === targetMonth.getFullYear();
+        });
+        const monthAiWorkouts = aiWorkouts.filter(w => {
+            const date = w.createdAt?.toDate?.() || new Date(0);
+            return date.getMonth() === targetMonth.getMonth() && 
+                   date.getFullYear() === targetMonth.getFullYear();
+        });
+        monthlyTrend.push({
+            month: targetMonth.toLocaleDateString('en-US', { month: 'short' }),
+            sessions: monthSessions.length,
+            aiWorkouts: monthAiWorkouts.length,
+            total: monthSessions.length + monthAiWorkouts.length
+        });
+    }
+
+    // Weekly activity (last 7 days)
+    const weeklyActivity = [];
+    for (let i = 6; i >= 0; i--) {
+        const targetDate = new Date(now);
+        targetDate.setDate(now.getDate() - i);
+        const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
+        const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59);
+        
+        // Count bookings for the day
+        const dayBookings = completedBookings.filter(b => {
+            const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+            return date >= dayStart && date <= dayEnd;
+        });
+        // Count AI workouts for the day
+        const dayAiWorkouts = aiWorkouts.filter(w => {
+            const date = w.createdAt?.toDate?.() || new Date(0);
+            return date >= dayStart && date <= dayEnd;
+        });
+        
+        weeklyActivity.push({
+            day: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
+            date: targetDate.getDate(),
+            sessions: dayBookings.length,
+            aiWorkouts: dayAiWorkouts.length,
+            total: dayBookings.length + dayAiWorkouts.length
+        });
+    }
+
+    // Top coaches (by booking count)
+    const coachCounts = {};
+    completedBookings.forEach(b => {
+        const coachId = b.coachId;
+        const coachName = b.coachName || 'Unknown Coach';
+        if (!coachCounts[coachId]) {
+            coachCounts[coachId] = { name: coachName, count: 0, coachId };
+        }
+        coachCounts[coachId].count++;
+    });
+    const topCoaches = Object.values(coachCounts)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+    // Goal progress (based on sessions and user goal)
+    const goalProgress = calculateGoalProgress(userProfile, completedBookings, sessions, aiWorkouts);
+
+    // Activity summary (recent events)
+    const recentActivity = generateActivitySummary(bookings, aiWorkouts, sessions);
+
+    // Streak calculation
+    const currentStreak = calculateStreak(completedBookings, aiWorkouts);
+
+    // Unique coaches count
+    const uniqueCoachIds = new Set(completedBookings.map(b => b.coachId).filter(id => id));
+    const uniqueCoachesCount = uniqueCoachIds.size;
+
+    // Cancellation rate
+    const cancellationRate = bookings.length > 0 
+        ? Math.round((cancelledBookings.length / bookings.length) * 100) 
+        : 0;
+
+    // Average session duration (from workout sessions)
+    let avgDuration = 0;
+    if (sessions.length > 0) {
+        const totalDuration = sessions.reduce((sum, s) => sum + (s.duration || 45), 0);
+        avgDuration = Math.round(totalDuration / sessions.length);
+    }
+
+    // Favorite workout time (most common hour)
+    const hourCounts = {};
+    completedBookings.forEach(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.();
+        if (date) {
+            const hour = date.getHours();
+            hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+        }
+    });
+    let favoriteTime = '-';
+    const maxHourEntry = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0];
+    if (maxHourEntry) {
+        const hour = parseInt(maxHourEntry[0]);
+        favoriteTime = hour < 12 ? `${hour || 12} AM` : `${hour === 12 ? 12 : hour - 12} PM`;
+    }
+
+    // Workout type distribution (from AI workouts)
+    const workoutTypes = {};
+    aiWorkouts.forEach(w => {
+        const type = w.workoutType || w.goal || 'general';
+        workoutTypes[type] = (workoutTypes[type] || 0) + 1;
+    });
+    const workoutTypeDistribution = Object.entries(workoutTypes)
+        .map(([type, count]) => ({ type, count }))
+        .sort((a, b) => b.count - a.count);
+
+    return {
+        sessionsThisMonth: sessionsThisMonth.length,
+        monthlyChange,
+        totalSessions,
+        completionRate,
+        completedBookings: completedBookings.length,
+        cancelledBookings: cancelledBookings.length,
+        weeklyAverage,
+        monthlyTrend,
+        weeklyActivity,
+        topCoaches,
+        goalProgress,
+        recentActivity,
+        currentStreak,
+        totalAiWorkouts: aiWorkouts.length,
+        totalBookings: bookings.length,
+        uniqueCoachesCount,
+        cancellationRate,
+        avgDuration,
+        favoriteTime,
+        workoutTypeDistribution
+    };
+}
+
+/**
+ * Calculate goal progress based on user's stated goal
+ */
+function calculateGoalProgress(userProfile, bookings, sessions, aiWorkouts) {
+    if (!userProfile || !userProfile.goal) {
+        return { goal: 'Not set', progress: 0, message: 'Set your fitness goal in your profile', color: 'gray' };
+    }
+
+    const goal = userProfile.goal;
+    const totalActivities = bookings.length + aiWorkouts.length;
+    
+    // Define milestones based on goal
+    const milestones = {
+        weight_loss: { target: 20, name: 'Weight Loss', color: 'pink', icon: '🔥' },
+        muscle_gain: { target: 24, name: 'Muscle Gain', color: 'blue', icon: '💪' },
+        endurance: { target: 30, name: 'Endurance', color: 'green', icon: '🏃' },
+        general_fitness: { target: 16, name: 'General Fitness', color: 'purple', icon: '⭐' }
+    };
+
+    const milestone = milestones[goal] || milestones.general_fitness;
+    const progress = Math.min(Math.round((totalActivities / milestone.target) * 100), 100);
+
+    let message;
+    if (progress < 25) {
+        message = 'Just getting started! Keep it up!';
+    } else if (progress < 50) {
+        message = 'Making progress! Stay consistent!';
+    } else if (progress < 75) {
+        message = 'Doing great! You\'re past halfway!';
+    } else if (progress < 100) {
+        message = 'Almost there! Push through!';
+    } else {
+        message = '🎉 Goal achieved! Time for a new challenge!';
+    }
+
+    return {
+        goal: milestone.name,
+        goalKey: goal,
+        progress,
+        target: milestone.target,
+        current: totalActivities,
+        message,
+        color: milestone.color,
+        icon: milestone.icon
+    };
+}
+
+/**
+ * Generate activity summary from recent events
+ */
+function generateActivitySummary(bookings, aiWorkouts, sessions) {
+    const activities = [];
+    
+    // Add recent bookings
+    bookings.slice(0, 5).forEach(b => {
+        const date = b.createdAt?.toDate?.() || new Date();
+        activities.push({
+            type: 'booking',
+            date,
+            title: `Session with ${b.coachName || 'Coach'}`,
+            status: b.status,
+            icon: b.status === 'completed' ? '✅' : b.status === 'cancelled' ? '❌' : '📅'
+        });
+    });
+
+    // Add recent AI workouts
+    aiWorkouts.slice(0, 5).forEach(w => {
+        const date = w.createdAt?.toDate?.() || new Date();
+        activities.push({
+            type: 'ai_workout',
+            date,
+            title: w.workout?.title || 'AI Workout Generated',
+            status: 'generated',
+            icon: '🤖'
+        });
+    });
+
+    // Sort by date and take top 5
+    return activities
+        .sort((a, b) => b.date - a.date)
+        .slice(0, 5);
+}
+
+/**
+ * Calculate current activity streak
+ */
+function calculateStreak(bookings, aiWorkouts) {
+    // Combine all activity dates
+    const activityDates = new Set();
+    
+    bookings.forEach(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.();
+        if (date) {
+            activityDates.add(date.toDateString());
+        }
+    });
+    
+    aiWorkouts.forEach(w => {
+        const date = w.createdAt?.toDate?.();
+        if (date) {
+            activityDates.add(date.toDateString());
+        }
+    });
+
+    // Calculate streak
+    let streak = 0;
+    const today = new Date();
+    
+    for (let i = 0; i < 365; i++) {
+        const checkDate = new Date(today);
+        checkDate.setDate(today.getDate() - i);
+        
+        if (activityDates.has(checkDate.toDateString())) {
+            streak++;
+        } else if (i > 0) { // Allow today to be missed
+            break;
+        }
+    }
+    
+    return streak;
+}
+
+/**
+ * Render analytics data to the UI
+ */
+function renderAnalytics(data) {
+    if (analyticsLoading) analyticsLoading.classList.add('hidden');
+    
+    // Check if there's any data to show
+    if (data.totalBookings === 0 && data.totalAiWorkouts === 0) {
+        showAnalyticsEmpty();
+        return;
+    }
+
+    if (analyticsContent) analyticsContent.classList.remove('hidden');
+    if (analyticsEmpty) analyticsEmpty.classList.add('hidden');
+
+    // Update key metrics (first row)
+    const sessionsThisMonthEl = document.getElementById('sessions-this-month');
+    const sessionsMonthChangeEl = document.getElementById('sessions-month-change');
+    const totalSessionsEl = document.getElementById('total-sessions');
+    const completionRateEl = document.getElementById('completion-rate');
+    const completionRateDetailEl = document.getElementById('completion-rate-detail');
+    const weeklyAverageEl = document.getElementById('weekly-average');
+
+    if (sessionsThisMonthEl) sessionsThisMonthEl.textContent = data.sessionsThisMonth;
+    if (sessionsMonthChangeEl) {
+        const changeText = data.monthlyChange >= 0 ? `↑ ${data.monthlyChange}%` : `↓ ${Math.abs(data.monthlyChange)}%`;
+        const changeColor = data.monthlyChange >= 0 ? 'text-emerald-400' : 'text-pink-400';
+        sessionsMonthChangeEl.textContent = changeText + ' vs last month';
+        sessionsMonthChangeEl.className = `text-xs mt-1 ${changeColor}`;
+    }
+    if (totalSessionsEl) totalSessionsEl.textContent = data.totalSessions;
+    if (completionRateEl) completionRateEl.textContent = `${data.completionRate}%`;
+    if (completionRateDetailEl) completionRateDetailEl.textContent = `${data.completedBookings} of ${data.totalBookings} completed`;
+    if (weeklyAverageEl) weeklyAverageEl.textContent = data.weeklyAverage;
+
+    // Update second row metrics
+    const currentStreakEl = document.getElementById('current-streak');
+    const aiWorkoutsCountEl = document.getElementById('ai-workouts-count');
+    const uniqueCoachesEl = document.getElementById('unique-coaches');
+    const cancellationRateEl = document.getElementById('cancellation-rate');
+    const avgDurationEl = document.getElementById('avg-duration');
+    const favoriteTimeEl = document.getElementById('favorite-time');
+
+    if (currentStreakEl) currentStreakEl.textContent = `${data.currentStreak} ${data.currentStreak === 1 ? 'day' : 'days'}`;
+    if (aiWorkoutsCountEl) aiWorkoutsCountEl.textContent = data.totalAiWorkouts;
+    if (uniqueCoachesEl) uniqueCoachesEl.textContent = data.uniqueCoachesCount;
+    if (cancellationRateEl) cancellationRateEl.textContent = `${data.cancellationRate}%`;
+    if (avgDurationEl) avgDurationEl.textContent = data.avgDuration > 0 ? `${data.avgDuration} min` : '45 min';
+    if (favoriteTimeEl) favoriteTimeEl.textContent = data.favoriteTime;
+
+    // Render monthly trend chart
+    renderMonthlyTrendChart(data.monthlyTrend);
+
+    // Render weekly activity chart
+    renderWeeklyActivityChart(data.weeklyActivity);
+
+    // Render top coaches
+    renderTopCoaches(data.topCoaches);
+
+    // Render goal progress
+    renderGoalProgress(data.goalProgress);
+
+    // Render activity summary
+    renderActivitySummary(data.recentActivity, data.currentStreak, data.totalAiWorkouts);
+}
+
+/**
+ * Render monthly trend bar chart
+ */
+function renderMonthlyTrendChart(monthlyTrend) {
+    const container = document.getElementById('monthly-trend-chart');
+    if (!container) return;
+
+    const maxValue = Math.max(...monthlyTrend.map(m => m.total), 1);
+    
+    container.innerHTML = monthlyTrend.map(m => {
+        const heightPercent = (m.total / maxValue) * 100;
+        const sessionsHeight = m.total > 0 ? (m.sessions / m.total) * heightPercent : 0;
+        const aiHeight = m.total > 0 ? (m.aiWorkouts / m.total) * heightPercent : 0;
+        
+        return `
+            <div class="flex-1 flex flex-col items-center gap-1">
+                <div class="w-full flex flex-col justify-end h-40 relative">
+                    <div class="w-full rounded-t transition-all duration-500" style="height: ${heightPercent}%">
+                        <div class="w-full bg-gradient-to-t from-blue-600 to-blue-400 rounded-t" style="height: ${sessionsHeight > 0 ? (sessionsHeight / heightPercent) * 100 : 0}%"></div>
+                        <div class="w-full bg-gradient-to-t from-purple-600 to-purple-400" style="height: ${aiHeight > 0 ? (aiHeight / heightPercent) * 100 : 0}%"></div>
+                    </div>
+                    <span class="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-white font-semibold">${m.total || ''}</span>
+                </div>
+                <span class="text-xs text-gray-400">${m.month}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render weekly activity bar chart
+ */
+function renderWeeklyActivityChart(weeklyActivity) {
+    const container = document.getElementById('weekly-activity-chart');
+    if (!container) return;
+
+    const maxValue = Math.max(...weeklyActivity.map(d => d.total), 1);
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'short' });
+    
+    container.innerHTML = weeklyActivity.map(d => {
+        const heightPercent = (d.total / maxValue) * 100;
+        const isToday = d.day === today;
+        
+        return `
+            <div class="flex-1 flex flex-col items-center gap-1">
+                <div class="w-full flex flex-col justify-end h-40 relative">
+                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-emerald-600 to-emerald-400' : 'bg-gradient-to-t from-cyan-600 to-cyan-400'} rounded-t transition-all duration-500 ${isToday ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-gray-950' : ''}" 
+                         style="height: ${heightPercent}%"></div>
+                    ${d.total > 0 ? `<span class="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-white font-semibold">${d.total}</span>` : ''}
+                </div>
+                <span class="text-xs ${isToday ? 'text-emerald-400 font-semibold' : 'text-gray-400'}">${d.day}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render top coaches list
+ */
+function renderTopCoaches(topCoaches) {
+    const container = document.getElementById('top-coaches-list');
+    const emptyEl = document.getElementById('top-coaches-empty');
+    if (!container) return;
+
+    if (topCoaches.length === 0) {
+        container.innerHTML = '';
+        if (emptyEl) emptyEl.classList.remove('hidden');
+        return;
+    }
+
+    if (emptyEl) emptyEl.classList.add('hidden');
+    
+    const maxCount = Math.max(...topCoaches.map(c => c.count), 1);
+    
+    container.innerHTML = topCoaches.map((coach, index) => {
+        const barWidth = (coach.count / maxCount) * 100;
+        const medals = ['🥇', '🥈', '🥉'];
+        const medal = index < 3 ? medals[index] : '';
+        
+        return `
+            <div class="flex items-center gap-3">
+                <span class="text-lg w-6">${medal || `${index + 1}.`}</span>
+                <div class="flex-1">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm text-white font-medium">${coach.name}</span>
+                        <span class="text-xs text-cyan-400">${coach.count} sessions</span>
+                    </div>
+                    <div class="w-full bg-gray-700/50 rounded-full h-2">
+                        <div class="h-2 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-500" style="width: ${barWidth}%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render goal progress section
+ */
+function renderGoalProgress(goalProgress) {
+    const container = document.getElementById('goal-progress-content');
+    if (!container) return;
+
+    const colorClasses = {
+        pink: { bg: 'from-pink-600 to-rose-500', text: 'text-pink-400', ring: 'ring-pink-500/30' },
+        blue: { bg: 'from-blue-600 to-indigo-500', text: 'text-blue-400', ring: 'ring-blue-500/30' },
+        green: { bg: 'from-emerald-600 to-green-500', text: 'text-emerald-400', ring: 'ring-emerald-500/30' },
+        purple: { bg: 'from-purple-600 to-violet-500', text: 'text-purple-400', ring: 'ring-purple-500/30' },
+        gray: { bg: 'from-gray-600 to-gray-500', text: 'text-gray-400', ring: 'ring-gray-500/30' }
+    };
+    
+    const colors = colorClasses[goalProgress.color] || colorClasses.gray;
+    
+    container.innerHTML = `
+        <div class="space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="text-2xl">${goalProgress.icon || '🎯'}</span>
+                    <div>
+                        <h4 class="font-semibold text-white">${goalProgress.goal}</h4>
+                        <p class="text-xs text-gray-400">${goalProgress.current || 0} / ${goalProgress.target || '?'} activities</p>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <span class="text-2xl font-bold ${colors.text}">${goalProgress.progress}%</span>
+                </div>
+            </div>
+            
+            <div class="relative">
+                <div class="w-full bg-gray-700/50 rounded-full h-4 ${colors.ring} ring-2">
+                    <div class="h-4 rounded-full bg-gradient-to-r ${colors.bg} transition-all duration-700 ease-out" 
+                         style="width: ${goalProgress.progress}%"></div>
+                </div>
+                ${goalProgress.progress >= 100 ? '<div class="absolute -right-1 -top-1 text-xl animate-bounce">🎉</div>' : ''}
+            </div>
+            
+            <p class="text-sm ${colors.text} text-center">${goalProgress.message}</p>
+        </div>
+    `;
+}
+
+/**
+ * Render activity summary
+ */
+function renderActivitySummary(recentActivity, streak, totalAiWorkouts) {
+    const container = document.getElementById('activity-summary');
+    if (!container) return;
+
+    const streakSection = `
+        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-orange-900/30 to-yellow-900/30 rounded-lg border border-orange-500/30">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl">🔥</span>
+                <div>
+                    <p class="text-sm font-semibold text-white">Current Streak</p>
+                    <p class="text-xs text-gray-400">Keep the momentum going!</p>
+                </div>
+            </div>
+            <div class="text-right">
+                <span class="text-2xl font-bold text-orange-400">${streak}</span>
+                <p class="text-xs text-orange-300">days</p>
+            </div>
+        </div>
+    `;
+
+    const aiWorkoutsSection = `
+        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-purple-900/30 to-indigo-900/30 rounded-lg border border-purple-500/30">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl">🤖</span>
+                <div>
+                    <p class="text-sm font-semibold text-white">AI Workouts Generated</p>
+                    <p class="text-xs text-gray-400">Personalized plans created</p>
+                </div>
+            </div>
+            <div class="text-right">
+                <span class="text-2xl font-bold text-purple-400">${totalAiWorkouts}</span>
+                <p class="text-xs text-purple-300">total</p>
+            </div>
+        </div>
+    `;
+
+    const activityListSection = recentActivity.length > 0 ? `
+        <div class="mt-4">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h4>
+            <div class="space-y-2">
+                ${recentActivity.map(a => `
+                    <div class="flex items-center gap-3 p-2 rounded-lg bg-gray-800/30 hover:bg-gray-800/50 transition-colors">
+                        <span class="text-lg">${a.icon}</span>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm text-white truncate">${a.title}</p>
+                            <p class="text-xs text-gray-400">${a.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                        </div>
+                        <span class="text-xs px-2 py-1 rounded ${
+                            a.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
+                            a.status === 'cancelled' ? 'bg-red-500/20 text-red-400' :
+                            a.status === 'generated' ? 'bg-purple-500/20 text-purple-400' :
+                            'bg-blue-500/20 text-blue-400'
+                        }">${a.status}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    ` : '';
+
+    container.innerHTML = streakSection + aiWorkoutsSection + activityListSection;
+}
+
+// End of User Analytics Functions
+// ============================================
+
+// ============================================
+// COACH ANALYTICS FUNCTIONS
+// ============================================
+
+// Coach Analytics DOM elements
+const refreshCoachAnalytics = document.getElementById("refresh-coach-analytics");
+const coachAnalyticsLoading = document.getElementById("coach-analytics-loading");
+const coachAnalyticsContent = document.getElementById("coach-analytics-content");
+const coachAnalyticsEmpty = document.getElementById("coach-analytics-empty");
+
+/**
+ * Show coach analytics loading state
+ */
+function showCoachAnalyticsLoading() {
+    if (coachAnalyticsLoading) coachAnalyticsLoading.classList.remove('hidden');
+    if (coachAnalyticsContent) coachAnalyticsContent.classList.add('hidden');
+    if (coachAnalyticsEmpty) coachAnalyticsEmpty.classList.add('hidden');
+}
+
+/**
+ * Show coach analytics empty state
+ */
+function showCoachAnalyticsEmpty() {
+    if (coachAnalyticsLoading) coachAnalyticsLoading.classList.add('hidden');
+    if (coachAnalyticsContent) coachAnalyticsContent.classList.add('hidden');
+    if (coachAnalyticsEmpty) coachAnalyticsEmpty.classList.remove('hidden');
+}
+
+/**
+ * Load and display coach analytics data
+ */
+async function loadCoachAnalytics() {
+    if (!currentCoachId) {
+        showCoachAnalyticsEmpty();
+        return;
+    }
+
+    showCoachAnalyticsLoading();
+
+    try {
+        // Fetch all bookings for this coach
+        const bookingsQuery = query(
+            collection(db, "bookings"),
+            where("coachId", "==", currentCoachId),
+            orderBy("createdAt", "desc")
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        const allBookings = bookingsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Fetch workout sessions conducted by this coach
+        const sessionsQuery = query(
+            collection(db, "workoutSessions"),
+            where("coachId", "==", currentCoachId),
+            orderBy("completedAt", "desc")
+        );
+        const sessionsSnap = await getDocs(sessionsQuery);
+        const allSessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Get coach profile for hourly rate
+        const coachRef = doc(db, "coaches", currentCoachId);
+        const coachSnap = await getDoc(coachRef);
+        const coachProfile = coachSnap.exists() ? coachSnap.data() : null;
+
+        // Calculate and render analytics
+        const analyticsData = calculateCoachAnalytics(allBookings, allSessions, coachProfile);
+        renderCoachAnalytics(analyticsData);
+
+    } catch (error) {
+        console.error('Failed to load coach analytics:', error);
+        showCoachAnalyticsEmpty();
+    }
+}
+
+/**
+ * Calculate coach analytics metrics
+ */
+function calculateCoachAnalytics(bookings, sessions, coachProfile) {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const hourlyRate = coachProfile?.hourlyRate || 0;
+
+    // Filter by status
+    const completedBookings = bookings.filter(b => b.status === 'completed');
+    
+    // Get unique clients
+    const clientMap = new Map();
+    completedBookings.forEach(b => {
+        if (!clientMap.has(b.userId)) {
+            clientMap.set(b.userId, {
+                id: b.userId,
+                name: b.userName || 'Unknown',
+                email: b.userEmail,
+                sessionsCount: 0,
+                lastSession: null,
+                goals: new Set()
+            });
+        }
+        const client = clientMap.get(b.userId);
+        client.sessionsCount++;
+        if (b.goal) client.goals.add(b.goal);
+        const sessionDate = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.();
+        if (!client.lastSession || sessionDate > client.lastSession) {
+            client.lastSession = sessionDate;
+        }
+    });
+    const uniqueClients = Array.from(clientMap.values());
+
+    // Active clients (had session in last 30 days)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const activeClients = uniqueClients.filter(c => c.lastSession && c.lastSession >= thirtyDaysAgo);
+
+    // New clients this month
+    const newClientsThisMonth = completedBookings.filter(b => {
+        const date = b.createdAt?.toDate?.() || new Date(0);
+        return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    }).reduce((acc, b) => {
+        if (!acc.has(b.userId)) acc.add(b.userId);
+        return acc;
+    }, new Set()).size;
+
+    // Sessions this month
+    const sessionsThisMonth = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+    });
+
+    // Sessions last month (for comparison)
+    const lastMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+    const lastMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+    const sessionsLastMonth = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date.getMonth() === lastMonth && date.getFullYear() === lastMonthYear;
+    });
+
+    // Monthly change
+    const sessionsChange = sessionsLastMonth.length > 0
+        ? Math.round(((sessionsThisMonth.length - sessionsLastMonth.length) / sessionsLastMonth.length) * 100)
+        : (sessionsThisMonth.length > 0 ? 100 : 0);
+
+    // Revenue calculations
+    const revenueThisMonth = sessionsThisMonth.length * hourlyRate;
+    const revenueLastMonth = sessionsLastMonth.length * hourlyRate;
+    const revenueChange = revenueLastMonth > 0
+        ? Math.round(((revenueThisMonth - revenueLastMonth) / revenueLastMonth) * 100)
+        : (revenueThisMonth > 0 ? 100 : 0);
+
+    // Average completion rate from sessions
+    let avgCompletion = 0;
+    if (sessions.length > 0) {
+        const totalCompletion = sessions.reduce((sum, s) => {
+            if (s.totalItems > 0) {
+                return sum + (s.completedItems / s.totalItems);
+            }
+            return sum;
+        }, 0);
+        avgCompletion = Math.round((totalCompletion / sessions.length) * 100);
+    }
+
+    // Revenue trend (last 6 months)
+    const revenueTrend = [];
+    for (let i = 5; i >= 0; i--) {
+        const targetMonth = new Date(currentYear, currentMonth - i, 1);
+        const monthSessions = completedBookings.filter(b => {
+            const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+            return date.getMonth() === targetMonth.getMonth() && 
+                   date.getFullYear() === targetMonth.getFullYear();
+        });
+        revenueTrend.push({
+            month: targetMonth.toLocaleDateString('en-US', { month: 'short' }),
+            sessions: monthSessions.length,
+            revenue: monthSessions.length * hourlyRate
+        });
+    }
+
+    // Weekly activity (last 7 days)
+    const weeklyActivity = [];
+    for (let i = 6; i >= 0; i--) {
+        const targetDate = new Date(now);
+        targetDate.setDate(now.getDate() - i);
+        const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
+        const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59);
+        
+        const daySessions = completedBookings.filter(b => {
+            const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+            return date >= dayStart && date <= dayEnd;
+        });
+        
+        weeklyActivity.push({
+            day: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
+            date: targetDate.getDate(),
+            count: daySessions.length
+        });
+    }
+
+    // Top clients by session count
+    const topClients = uniqueClients
+        .sort((a, b) => b.sessionsCount - a.sessionsCount)
+        .slice(0, 5);
+
+    // Goals distribution
+    const goalCounts = {};
+    completedBookings.forEach(b => {
+        const goal = b.goal || 'general_fitness';
+        goalCounts[goal] = (goalCounts[goal] || 0) + 1;
+    });
+    const goalsDistribution = Object.entries(goalCounts)
+        .map(([goal, count]) => ({ goal, count }))
+        .sort((a, b) => b.count - a.count);
+
+    // Clients needing attention (no session in 14+ days, but were active before)
+    const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const clientsNeedingAttention = uniqueClients.filter(c => {
+        return c.sessionsCount >= 2 && c.lastSession && c.lastSession < twoWeeksAgo;
+    }).sort((a, b) => a.lastSession - b.lastSession).slice(0, 5);
+
+    // Performance metrics
+    const totalSessions = completedBookings.length;
+    const cancelledBookings = bookings.filter(b => b.status === 'cancelled').length;
+    const cancellationRate = bookings.length > 0 
+        ? Math.round((cancelledBookings / bookings.length) * 100) 
+        : 0;
+    const avgSessionsPerClient = uniqueClients.length > 0 
+        ? (totalSessions / uniqueClients.length).toFixed(1) 
+        : 0;
+
+    // Total lifetime revenue
+    const totalRevenue = totalSessions * hourlyRate;
+
+    // Client retention rate (clients with 2+ sessions / total clients)
+    const returningClients = uniqueClients.filter(c => c.sessionsCount >= 2);
+    const retentionRate = uniqueClients.length > 0 
+        ? Math.round((returningClients.length / uniqueClients.length) * 100) 
+        : 0;
+
+    // Peak booking hour
+    const peakHourCounts = {};
+    completedBookings.forEach(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.();
+        if (date) {
+            const hour = date.getHours();
+            peakHourCounts[hour] = (peakHourCounts[hour] || 0) + 1;
+        }
+    });
+    let peakHour = '-';
+    const maxPeakEntry = Object.entries(peakHourCounts).sort((a, b) => b[1] - a[1])[0];
+    if (maxPeakEntry) {
+        const hour = parseInt(maxPeakEntry[0]);
+        peakHour = hour < 12 ? `${hour || 12} AM` : `${hour === 12 ? 12 : hour - 12} PM`;
+    }
+
+    // Monthly growth rate (comparing last 3 months avg to previous 3 months avg)
+    const threeMonthsAgo = new Date(currentYear, currentMonth - 3, 1);
+    const sixMonthsAgo = new Date(currentYear, currentMonth - 6, 1);
+    
+    const recentThreeMonths = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date >= threeMonthsAgo;
+    }).length;
+    
+    const previousThreeMonths = completedBookings.filter(b => {
+        const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
+        return date >= sixMonthsAgo && date < threeMonthsAgo;
+    }).length;
+    
+    const growthRate = previousThreeMonths > 0 
+        ? Math.round(((recentThreeMonths - previousThreeMonths) / previousThreeMonths) * 100)
+        : (recentThreeMonths > 0 ? 100 : 0);
+
+    return {
+        activeClients: activeClients.length,
+        totalClients: uniqueClients.length,
+        newClientsThisMonth,
+        sessionsThisMonth: sessionsThisMonth.length,
+        sessionsChange,
+        totalSessions,
+        revenueThisMonth,
+        revenueChange,
+        avgCompletion,
+        revenueTrend,
+        weeklyActivity,
+        topClients,
+        goalsDistribution,
+        clientsNeedingAttention,
+        cancellationRate,
+        avgSessionsPerClient,
+        hourlyRate,
+        totalRevenue,
+        retentionRate,
+        peakHour,
+        growthRate
+    };
+}
+
+/**
+ * Render coach analytics to UI
+ */
+function renderCoachAnalytics(data) {
+    if (coachAnalyticsLoading) coachAnalyticsLoading.classList.add('hidden');
+    
+    if (data.totalSessions === 0) {
+        showCoachAnalyticsEmpty();
+        return;
+    }
+
+    if (coachAnalyticsContent) coachAnalyticsContent.classList.remove('hidden');
+    if (coachAnalyticsEmpty) coachAnalyticsEmpty.classList.add('hidden');
+
+    // Update key metrics (first row)
+    const activeClientsEl = document.getElementById('coach-active-clients');
+    const newClientsEl = document.getElementById('coach-new-clients');
+    const sessionsMonthEl = document.getElementById('coach-sessions-month');
+    const sessionsChangeEl = document.getElementById('coach-sessions-change');
+    const revenueMonthEl = document.getElementById('coach-revenue-month');
+    const revenueChangeEl = document.getElementById('coach-revenue-change');
+    const avgCompletionEl = document.getElementById('coach-avg-completion');
+
+    if (activeClientsEl) activeClientsEl.textContent = data.activeClients;
+    if (newClientsEl) newClientsEl.textContent = `+${data.newClientsThisMonth} new this month`;
+    if (sessionsMonthEl) sessionsMonthEl.textContent = data.sessionsThisMonth;
+    if (sessionsChangeEl) {
+        const changeText = data.sessionsChange >= 0 ? `↑ ${data.sessionsChange}%` : `↓ ${Math.abs(data.sessionsChange)}%`;
+        sessionsChangeEl.textContent = changeText + ' vs last month';
+        sessionsChangeEl.className = `text-xs mt-1 ${data.sessionsChange >= 0 ? 'text-emerald-400' : 'text-pink-400'}`;
+    }
+    if (revenueMonthEl) revenueMonthEl.textContent = `₹${data.revenueThisMonth.toLocaleString()}`;
+    if (revenueChangeEl) {
+        const changeText = data.revenueChange >= 0 ? `↑ ${data.revenueChange}%` : `↓ ${Math.abs(data.revenueChange)}%`;
+        revenueChangeEl.textContent = changeText + ' vs last month';
+        revenueChangeEl.className = `text-xs mt-1 ${data.revenueChange >= 0 ? 'text-yellow-400' : 'text-pink-400'}`;
+    }
+    if (avgCompletionEl) avgCompletionEl.textContent = `${data.avgCompletion}%`;
+
+    // Update second row metrics
+    const totalRevenueEl = document.getElementById('coach-total-revenue');
+    const retentionRateEl = document.getElementById('coach-retention-rate');
+    const avgSessionsEl = document.getElementById('coach-avg-sessions');
+    const cancellationRateEl = document.getElementById('coach-cancellation-rate');
+    const peakHourEl = document.getElementById('coach-peak-hour');
+    const growthRateEl = document.getElementById('coach-growth-rate');
+
+    if (totalRevenueEl) totalRevenueEl.textContent = `₹${data.totalRevenue.toLocaleString()}`;
+    if (retentionRateEl) retentionRateEl.textContent = `${data.retentionRate}%`;
+    if (avgSessionsEl) avgSessionsEl.textContent = data.avgSessionsPerClient;
+    if (cancellationRateEl) cancellationRateEl.textContent = `${data.cancellationRate}%`;
+    if (peakHourEl) peakHourEl.textContent = data.peakHour;
+    if (growthRateEl) {
+        growthRateEl.textContent = `${data.growthRate >= 0 ? '+' : ''}${data.growthRate}%`;
+        growthRateEl.className = `text-xl font-bold ${data.growthRate >= 0 ? 'text-lime-400' : 'text-red-400'}`;
+    }
+
+    // Render charts
+    renderCoachRevenueChart(data.revenueTrend);
+    renderCoachWeeklyChart(data.weeklyActivity);
+    
+    // Render lists
+    renderCoachTopClients(data.topClients);
+    renderCoachGoalsDistribution(data.goalsDistribution);
+    renderCoachPerformanceSummary(data);
+    renderClientsNeedingAttention(data.clientsNeedingAttention);
+}
+
+/**
+ * Render revenue trend chart
+ */
+function renderCoachRevenueChart(revenueTrend) {
+    const container = document.getElementById('coach-revenue-chart');
+    if (!container) return;
+
+    const maxRevenue = Math.max(...revenueTrend.map(m => m.revenue), 1);
+    
+    container.innerHTML = revenueTrend.map((m, idx) => {
+        const heightPercent = (m.revenue / maxRevenue) * 100;
+        const isCurrentMonth = idx === revenueTrend.length - 1;
+        
+        return `
+            <div class="flex-1 flex flex-col items-center gap-1">
+                <div class="w-full flex flex-col justify-end h-32 relative">
+                    <div class="w-full ${isCurrentMonth ? 'bg-gradient-to-t from-yellow-600 to-amber-400' : 'bg-gradient-to-t from-yellow-700/60 to-amber-500/60'} rounded-t transition-all duration-500" 
+                         style="height: ${heightPercent}%"></div>
+                    ${m.revenue > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-yellow-300 font-medium whitespace-nowrap">₹${(m.revenue/1000).toFixed(1)}k</span>` : ''}
+                </div>
+                <span class="text-xs ${isCurrentMonth ? 'text-yellow-400 font-semibold' : 'text-gray-400'}">${m.month}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render weekly sessions chart
+ */
+function renderCoachWeeklyChart(weeklyActivity) {
+    const container = document.getElementById('coach-weekly-chart');
+    if (!container) return;
+
+    const maxCount = Math.max(...weeklyActivity.map(d => d.count), 1);
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'short' });
+    
+    container.innerHTML = weeklyActivity.map(d => {
+        const heightPercent = (d.count / maxCount) * 100;
+        const isToday = d.day === today;
+        
+        return `
+            <div class="flex-1 flex flex-col items-center gap-1">
+                <div class="w-full flex flex-col justify-end h-32 relative">
+                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-emerald-600 to-emerald-400 ring-2 ring-emerald-400 ring-offset-2 ring-offset-gray-950' : 'bg-gradient-to-t from-emerald-700/60 to-emerald-500/60'} rounded-t transition-all duration-500" 
+                         style="height: ${Math.max(heightPercent, d.count > 0 ? 10 : 0)}%"></div>
+                    ${d.count > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-emerald-300 font-semibold">${d.count}</span>` : ''}
+                </div>
+                <span class="text-xs ${isToday ? 'text-emerald-400 font-semibold' : 'text-gray-400'}">${d.day}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render top clients list
+ */
+function renderCoachTopClients(topClients) {
+    const container = document.getElementById('coach-top-clients');
+    const emptyEl = document.getElementById('coach-top-clients-empty');
+    if (!container) return;
+
+    if (topClients.length === 0) {
+        container.innerHTML = '';
+        if (emptyEl) emptyEl.classList.remove('hidden');
+        return;
+    }
+
+    if (emptyEl) emptyEl.classList.add('hidden');
+    const maxSessions = Math.max(...topClients.map(c => c.sessionsCount), 1);
+    
+    container.innerHTML = topClients.map((client, idx) => {
+        const barWidth = (client.sessionsCount / maxSessions) * 100;
+        const medals = ['🥇', '🥈', '🥉'];
+        const medal = idx < 3 ? medals[idx] : '';
+        const goalsList = Array.from(client.goals).slice(0, 2).map(g => 
+            g.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())
+        ).join(', ');
+        
+        return `
+            <div class="flex items-center gap-3">
+                <span class="text-lg w-6">${medal || `${idx + 1}.`}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm text-white font-medium truncate">${client.name}</span>
+                        <span class="text-xs text-blue-400 ml-2">${client.sessionsCount} sessions</span>
+                    </div>
+                    <div class="w-full bg-gray-700/50 rounded-full h-1.5">
+                        <div class="h-1.5 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500" style="width: ${barWidth}%"></div>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1 truncate">${goalsList || 'General'}</p>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render goals distribution
+ */
+function renderCoachGoalsDistribution(goalsDistribution) {
+    const container = document.getElementById('coach-goals-distribution');
+    if (!container) return;
+
+    const goalLabels = {
+        weight_loss: { label: 'Weight Loss', color: 'pink', icon: '🔥' },
+        muscle_gain: { label: 'Muscle Gain', color: 'blue', icon: '💪' },
+        endurance: { label: 'Endurance', color: 'green', icon: '🏃' },
+        general_fitness: { label: 'General Fitness', color: 'purple', icon: '⭐' },
+        yoga: { label: 'Yoga', color: 'teal', icon: '🧘' },
+        hiit: { label: 'HIIT', color: 'orange', icon: '⚡' }
+    };
+
+    const total = goalsDistribution.reduce((sum, g) => sum + g.count, 0);
+    
+    if (total === 0) {
+        container.innerHTML = '<p class="text-sm text-gray-400">No data yet</p>';
+        return;
+    }
+
+    container.innerHTML = goalsDistribution.slice(0, 4).map(g => {
+        const goalInfo = goalLabels[g.goal] || { label: g.goal.replace('_', ' '), color: 'gray', icon: '🎯' };
+        const percentage = Math.round((g.count / total) * 100);
+        
+        const colorClasses = {
+            pink: 'from-pink-600 to-rose-500 text-pink-300',
+            blue: 'from-blue-600 to-indigo-500 text-blue-300',
+            green: 'from-emerald-600 to-green-500 text-emerald-300',
+            purple: 'from-purple-600 to-violet-500 text-purple-300',
+            teal: 'from-teal-600 to-cyan-500 text-teal-300',
+            orange: 'from-orange-600 to-amber-500 text-orange-300',
+            gray: 'from-gray-600 to-gray-500 text-gray-300'
+        };
+        const colors = colorClasses[goalInfo.color] || colorClasses.gray;
+        
+        return `
+            <div class="flex items-center gap-3">
+                <span class="text-lg">${goalInfo.icon}</span>
+                <div class="flex-1">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm ${colors.split(' ')[2]}">${goalInfo.label}</span>
+                        <span class="text-xs text-gray-400">${percentage}% (${g.count})</span>
+                    </div>
+                    <div class="w-full bg-gray-700/50 rounded-full h-2">
+                        <div class="h-2 rounded-full bg-gradient-to-r ${colors.split(' ').slice(0, 2).join(' ')}" style="width: ${percentage}%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Render performance summary
+ */
+function renderCoachPerformanceSummary(data) {
+    const container = document.getElementById('coach-performance-summary');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
+            <span class="text-sm text-gray-400">Total Sessions</span>
+            <span class="text-sm font-semibold text-white">${data.totalSessions}</span>
+        </div>
+        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
+            <span class="text-sm text-gray-400">Total Clients</span>
+            <span class="text-sm font-semibold text-white">${data.totalClients}</span>
+        </div>
+        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
+            <span class="text-sm text-gray-400">Avg Sessions/Client</span>
+            <span class="text-sm font-semibold text-white">${data.avgSessionsPerClient}</span>
+        </div>
+        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
+            <span class="text-sm text-gray-400">Cancellation Rate</span>
+            <span class="text-sm font-semibold ${data.cancellationRate > 20 ? 'text-red-400' : 'text-emerald-400'}">${data.cancellationRate}%</span>
+        </div>
+        <div class="flex items-center justify-between p-2 bg-yellow-900/20 rounded-lg border border-yellow-500/20">
+            <span class="text-sm text-yellow-300">Hourly Rate</span>
+            <span class="text-sm font-semibold text-yellow-400">₹${data.hourlyRate.toLocaleString()}</span>
+        </div>
+    `;
+}
+
+/**
+ * Render clients needing attention
+ */
+function renderClientsNeedingAttention(clients) {
+    const container = document.getElementById('coach-attention-clients');
+    const emptyEl = document.getElementById('coach-attention-empty');
+    const countEl = document.getElementById('attention-count');
+    if (!container) return;
+
+    if (countEl) countEl.textContent = clients.length;
+
+    if (clients.length === 0) {
+        container.innerHTML = '';
+        if (emptyEl) emptyEl.classList.remove('hidden');
+        return;
+    }
+
+    if (emptyEl) emptyEl.classList.add('hidden');
+    const now = new Date();
+    
+    container.innerHTML = clients.map(client => {
+        const daysSinceLastSession = Math.floor((now - client.lastSession) / (1000 * 60 * 60 * 24));
+        
+        return `
+            <div class="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-red-500/20 hover:border-red-500/40 transition-colors">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-400">
+                        ${client.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-white">${client.name}</p>
+                        <p class="text-xs text-gray-400">${client.sessionsCount} total sessions</p>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-red-400 font-medium">${daysSinceLastSession} days ago</p>
+                    <p class="text-xs text-gray-500">Last session</p>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// End of Coach Analytics Functions
+// ============================================
+
 async function createBooking(coachId, goal, scheduledAt) {
     const user = auth.currentUser;
     if (!user) return;
@@ -2795,7 +4052,10 @@ coachProfileForm.addEventListener("submit", async (e) => {
         // Reload coach profile to show dashboard
         const coachId = await loadCoachProfile(user.email);
         if (coachId) {
-            await fetchCoachBookings();
+            await Promise.all([
+                fetchCoachBookings(),
+                loadCoachAnalytics()
+            ]);
         }
     } catch (e) {
         coachProfileStatus.textContent = "Failed to save.";
@@ -2820,6 +4080,16 @@ refreshBookings.addEventListener("click", async () => {
 
 coachRefreshBookings.addEventListener("click", async () => {
     await fetchCoachBookings();
+});
+
+// Analytics refresh button (User)
+refreshAnalytics?.addEventListener("click", async () => {
+    await loadAnalytics();
+});
+
+// Coach Analytics refresh button
+refreshCoachAnalytics?.addEventListener("click", async () => {
+    await loadCoachAnalytics();
 });
 
 // Save session notes button
@@ -3748,9 +5018,12 @@ onAuthStateChanged(auth, async (user) => {
         } else if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
             if (coachId) {
-                // Coach profile exists, load bookings
+                // Coach profile exists, load bookings and analytics
                 currentCoachId = coachId;
-                await fetchCoachBookings();
+                await Promise.all([
+                    fetchCoachBookings(),
+                    loadCoachAnalytics()
+                ]);
             }
             // Otherwise show profile setup form
         } else {
@@ -3759,7 +5032,8 @@ onAuthStateChanged(auth, async (user) => {
             await Promise.all([
                 fetchWorkoutsForGoal(goalEl.value),
                 fetchCoachesForGoal(null), // null = show all coaches
-                fetchBookings()
+                fetchBookings(),
+                loadAnalytics() // Load user analytics
             ]);
         }
     } else {
@@ -3767,6 +5041,7 @@ onAuthStateChanged(auth, async (user) => {
         renderCoaches([], null);
         renderBookings([]);
         renderCoachCalendar([]);
+        showAnalyticsEmpty(); // Clear analytics on logout
         currentUserId = null;
         currentCoachId = null;
         
