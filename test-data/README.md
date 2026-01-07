@@ -13,29 +13,42 @@ This folder contains tools to seed test data for the FindMyFitCoach analytics sy
 5. Download the JSON file
 6. Save it as `service-account.json` in this folder
 
-### 2. Install Dependencies
+### 2. Enable Email/Password Auth in Firebase
+
+1. Go to Firebase Console → **Authentication** → **Sign-in method**
+2. Enable **Email/Password** provider
+3. Save
+
+### 3. Install Dependencies
 
 ```powershell
 cd test-data
 npm install
 ```
 
-### 3. Run the Seeder
+### 4. Create Test Users & Seed Data
 
 ```powershell
-# Seed all test data (recommended)
-npm run seed
+# Option A: Full setup (create auth users + seed data)
+npm run setup
 
-# Or seed specific data
-npm run seed:user    # Only user analytics data
-npm run seed:coach   # Only coach analytics data
-
-# Clear all test data
-npm run clear
-
-# Show help
-npm run help
+# Option B: Step by step
+npm run users        # Create Firebase Auth test accounts
+npm run seed         # Seed Firestore test data
 ```
+
+## All Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run setup` | Full setup: create users + seed all data |
+| `npm run users` | Create Firebase Auth test accounts only |
+| `npm run users:delete` | Delete all test auth accounts |
+| `npm run seed` | Seed all Firestore test data |
+| `npm run seed:user` | Seed only user analytics data |
+| `npm run seed:coach` | Seed only coach analytics data |
+| `npm run clear` | Clear all Firestore test data |
+| `npm run help` | Show help |
 
 ## What Gets Created
 
@@ -58,20 +71,31 @@ npm run help
 
 ## Test Accounts
 
+**Password for ALL test accounts: `test123456`**
+
 ### Test User
-- **User ID**: `test-user-main`
-- **Email**: `testuser@findmyfitcoach.com`
+| Field | Value |
+|-------|-------|
+| Email | `testuser@findmyfitcoach.com` |
+| Password | `test123456` |
+| User ID | `test-user-main` |
 
 ### Test Coaches
 | Name | Email | Specialization | Rate |
 |------|-------|----------------|------|
-| Sarah Johnson | sarah@fitcoach.com | Weight Loss, HIIT | ₹2,500/hr |
-| Mike Chen | mike@fitcoach.com | Muscle Gain, CrossFit | ₹2,200/hr |
-| Emma Williams | emma@fitcoach.com | Yoga, Pilates | ₹1,800/hr |
-| Raj Patel | raj@fitcoach.com | Endurance, Cardio | ₹1,600/hr |
-| Lisa Martinez | lisa@fitcoach.com | General Fitness | ₹2,000/hr |
-| David Kim | david@fitcoach.com | HIIT, Sports | ₹2,400/hr |
-| Anna Schmidt | anna@fitcoach.com | Rehabilitation | ₹2,100/hr |
+| Sarah Johnson | `sarah@fitcoach.com` | Weight Loss, HIIT | ₹2,500/hr |
+| Mike Chen | `mike@fitcoach.com` | Muscle Gain, CrossFit | ₹2,200/hr |
+| Emma Williams | `emma@fitcoach.com` | Yoga, Pilates | ₹1,800/hr |
+| Raj Patel | `raj@fitcoach.com` | Endurance, Cardio | ₹1,600/hr |
+| Lisa Martinez | `lisa@fitcoach.com` | General Fitness | ₹2,000/hr |
+| David Kim | `david@fitcoach.com` | HIIT, Sports | ₹2,400/hr |
+| Anna Schmidt | `anna@fitcoach.com` | Rehabilitation | ₹2,100/hr |
+
+### Additional Test Clients (for coach analytics)
+| Name | Email |
+|------|-------|
+| John Smith | `john.smith@email.com` |
+| Jane Doe | `jane.doe@email.com` |
 
 ## Data Patterns
 

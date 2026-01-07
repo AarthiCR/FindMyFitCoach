@@ -8,7 +8,10 @@
     "seed:user": "node seed.js --user-only",
     "seed:coach": "node seed.js --coach-only",
     "clear": "node seed.js --clear",
-    "help": "node seed.js --help"
+    "help": "node seed.js --help",
+    "users": "node create-auth-users.js",
+    "users:delete": "node create-auth-users.js --delete",
+    "setup": "npm run users && npm run seed"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0"
