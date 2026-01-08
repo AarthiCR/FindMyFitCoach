@@ -41,6 +41,11 @@ const db = getFirestore(app);
 
 // Initialize AI Service
 const aiService = new AIService(openaiApiKey);
+console.log('🤖 AI Service initialized:', {
+    hasApiKey: !!openaiApiKey,
+    apiKeyLength: openaiApiKey?.length || 0,
+    apiKeyPreview: openaiApiKey ? openaiApiKey.substring(0, 10) + '...' : 'None'
+});
 
 // UI elements
 const userMenu = document.getElementById("user-menu");
@@ -146,6 +151,12 @@ let notificationsListener = null;
 let bookingsListener = null;
 let userBookingsListener = null; // Separate listener for user bookings
 
+// Presence tracking variables
+const ONLINE_PRESENCE_INTERVAL = 30000; // 30 seconds
+const OFFLINE_TIMEOUT = 90000; // 90 seconds offline threshold
+let presenceHeartbeat = null;
+let coachPresenceListener = null;
+
 // AI Workout elements
 const generateWorkoutBtn = document.getElementById("generate-workout");
 const aiWorkoutContainer = document.getElementById("ai-workout-container");
@@ -174,6 +185,19 @@ const closeVideoCallBtn = document.getElementById("close-video-call");
 const jitsiContainer = document.getElementById("jitsi-container");
 const userProfilePanel = document.getElementById("user-profile-panel");
 const userWorkoutPanel = document.getElementById("user-workout-panel");
+
+// Pre-session review modal elements
+const preSessionModal = document.getElementById("pre-session-modal");
+const closePreSessionBtn = document.getElementById("close-pre-session");
+const completeReviewBtn = document.getElementById("complete-review-btn");
+const saveNotesBtn = document.getElementById("save-notes-btn");
+const coachSessionNotes = document.getElementById("coach-session-notes");
+const aiAnalysisLoading = document.getElementById("ai-analysis-loading");
+const aiAnalysisContent = document.getElementById("ai-analysis-content");
+
+// Global variables for current review session
+let currentReviewBooking = null;
+let savedAIAnalysis = null; // Store AI analysis for workout generation
 const sessionNotesTextarea = document.getElementById("session-notes");
 const saveSessionNotesBtn = document.getElementById("save-session-notes");
 const notesStatus = document.getElementById("notes-status");
@@ -262,6 +286,13 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
     }
     
     videoCallModal.classList.remove("hidden");
+    
+    // Hide past sessions during active call for cleaner interface
+    const coachPastSections = document.getElementById('coach-past-sessions-section');
+    const userPastSections = document.getElementById('user-past-sessions-section');
+    if (coachPastSections) coachPastSections.classList.add('hidden');
+    if (userPastSections) userPastSections.classList.add('hidden');
+    
     callStarted = false; // Reset flag
     participantCount = 0; // Reset participant count
     
@@ -444,6 +475,96 @@ closeVideoCallBtn.addEventListener("click", async () => {
     }
 });
 
+// Pre-session modal event listeners
+closePreSessionBtn?.addEventListener("click", () => {
+    closePreSessionReview();
+});
+
+completeReviewBtn?.addEventListener("click", async () => {
+    completeReviewBtn.disabled = true;
+    completeReviewBtn.innerHTML = 'Starting Session...';
+    try {
+        await completeReviewAndJoinSession();
+    } catch (error) {
+        console.error('Error completing review:', error);
+        alert('Failed to start session: ' + error.message);
+    } finally {
+        completeReviewBtn.disabled = false;
+        completeReviewBtn.innerHTML = 'Complete Review & Join Session';
+    }
+});
+
+saveNotesBtn?.addEventListener("click", async () => {
+    if (!currentReviewBooking) return;
+    
+    const notes = coachSessionNotes.value.trim();
+    if (!notes) {
+        alert('Please enter some notes before saving.');
+        return;
+    }
+    
+    try {
+        saveNotesBtn.disabled = true;
+        saveNotesBtn.innerHTML = 'Saving...';
+        
+        await updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
+            coachNotes: notes,
+            notesUpdatedAt: serverTimestamp()
+        });
+        
+        saveNotesBtn.innerHTML = '✓ Saved';
+        setTimeout(() => {
+            saveNotesBtn.innerHTML = 'Save Notes';
+            saveNotesBtn.disabled = false;
+        }, 2000);
+    } catch (error) {
+        console.error('Error saving notes:', error);
+        alert('Failed to save notes: ' + error.message);
+        saveNotesBtn.innerHTML = 'Save Notes';
+        saveNotesBtn.disabled = false;
+    }
+});
+
+// Past sessions toggle event listener
+document.getElementById('past-sessions-toggle')?.addEventListener('click', () => {
+    const content = document.getElementById('past-sessions-content');
+    const arrow = document.getElementById('past-sessions-arrow');
+    
+    if (content.classList.contains('hidden')) {
+        content.classList.remove('hidden');
+        arrow.classList.add('rotate-180');
+    } else {
+        content.classList.add('hidden');
+        arrow.classList.remove('rotate-180');
+    }
+});
+
+// Hide past sessions during video calls for cleaner interface
+function hidePastSessionsDuringCall() {
+    const coachPastSections = document.getElementById('coach-past-sessions-section');
+    const userPastSections = document.getElementById('user-past-sessions-section');
+    
+    if (coachPastSections) {
+        coachPastSections.classList.add('hidden');
+    }
+    if (userPastSections) {
+        userPastSections.classList.add('hidden');
+    }
+}
+
+// Show past sessions when not in call
+function showPastSessionsWhenNotInCall() {
+    const coachPastSections = document.getElementById('coach-past-sessions-section');
+    const userPastSections = document.getElementById('user-past-sessions-section');
+    
+    if (coachPastSections) {
+        coachPastSections.classList.remove('hidden');
+    }
+    if (userPastSections) {
+        userPastSections.classList.remove('hidden');
+    }
+}
+
 // Load user profile data for the coaching session
 async function loadUserProfileForSession(bookingId) {
     try {
@@ -527,7 +648,7 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
                     const snapshot = await getDocs(q);
                     
                     if (snapshot.empty) {
-                        tooltipContent.innerHTML = '<p class="text-gray-400 italic text-xs">No past sessions with this user</p>';
+                        tooltipContent.innerHTML = '<p class="text-slate-600 italic text-xs">No past sessions with this user</p>';
                     } else {
                         tooltipContent.innerHTML = '';
                         
@@ -645,7 +766,7 @@ async function loadPastWorkouts(userId) {
         
         if (snapshot.empty) {
             console.log('ℹ️ No past sessions found');
-            pastWorkoutsList.innerHTML = '<p class="text-gray-400 italic text-xs">No past sessions</p>';
+            pastWorkoutsList.innerHTML = '<p class="text-slate-600 italic text-xs">No past sessions</p>';
             return;
         }
         
@@ -692,7 +813,7 @@ async function loadPastWorkouts(userId) {
                 pastWorkoutsList.innerHTML = '<p class="text-yellow-400 italic text-xs">Database index required. Check console.</p>';
                 console.error('🔥 FIRESTORE INDEX REQUIRED! Click the link in the error above or check Firebase Console.');
             } else {
-                pastWorkoutsList.innerHTML = '<p class="text-red-400 italic text-xs">Unable to load past sessions</p>';
+                pastWorkoutsList.innerHTML = '<p class="text-red-600 italic text-xs">Unable to load past sessions</p>';
             }
         }
     }
@@ -761,7 +882,7 @@ function renderWorkoutChecklist() {
     checklistContainer.innerHTML = '';
     
     if (!workoutChecklist || workoutChecklist.length === 0) {
-        checklistContainer.innerHTML = '<p class="text-gray-400 italic text-xs">No workout plan available</p>';
+        checklistContainer.innerHTML = '<p class="text-gray-600 italic text-xs">No workout plan available</p>';
         return;
     }
     
@@ -770,10 +891,10 @@ function renderWorkoutChecklist() {
     
     workoutChecklist.forEach(item => {
         const label = document.createElement('label');
-        label.className = 'flex items-start gap-2 text-xs cursor-pointer hover:bg-gray-700/30 p-2 rounded transition-colors';
+        label.className = 'flex items-start gap-2 text-xs cursor-pointer hover:bg-gray-100 p-2 rounded transition-colors';
         label.innerHTML = `
             <input type="checkbox" class="mt-0.5 workout-item rounded" data-id="${item.id}" ${item.completed ? 'checked' : ''}>
-            <span class="${item.completed ? 'line-through text-gray-500' : 'text-white'}">${item.exercise}</span>
+            <span class="${item.completed ? 'line-through text-gray-500' : 'text-gray-800'}">${item.exercise}</span>
         `;
         div.appendChild(label);
     });
@@ -1513,6 +1634,9 @@ async function saveCoachProfile(user) {
         yearsExperience: Number(coachExperienceEl.value),
         hourlyRate: Number(coachRateEl.value),
         rating: 5.0, // Default rating
+        approved: false, // Requires admin approval
+        isOnline: false, // Initial presence status
+        lastSeen: serverTimestamp(), // Initial last seen timestamp
         updatedAt: serverTimestamp()
     };
     
@@ -1527,12 +1651,17 @@ async function saveCoachProfile(user) {
     if (!snap.empty) {
         // Update existing profile
         const coachDoc = snap.docs[0];
+        currentCoachId = coachDoc.id;
         await updateDoc(doc(db, "coaches", coachDoc.id), coachData);
     } else {
         // Create new profile
         coachData.createdAt = serverTimestamp();
-        await addDoc(collection(db, "coaches"), coachData);
+        const newDocRef = await addDoc(collection(db, "coaches"), coachData);
+        currentCoachId = newDocRef.id;
     }
+    
+    // Start presence tracking for the newly created or updated coach profile
+    startPresenceTracking();
 }
 
 async function saveUserProfile(user) {
@@ -1612,7 +1741,26 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
         const hasAI = !!aiRec;
         
         card.className = `rounded-lg border p-4 flex flex-col gap-2 ${hasAI ? 'border-indigo-300 dark:border-indigo-700' : ''}`;
+        card.setAttribute('data-coach-id', c.id); // Add data attribute for presence updates
         const btnId = `book-${c.id}`;
+        
+        // Check if coach is online
+        const onlineStatus = isCoachOnline(c);
+        let presenceClass, presenceTitle;
+        
+        if (onlineStatus === null) {
+            // No presence data available
+            presenceClass = 'bg-yellow-400';
+            presenceTitle = 'Status: N/A';
+        } else if (onlineStatus === true) {
+            // Online
+            presenceClass = 'bg-green-500';
+            presenceTitle = 'Online now';
+        } else {
+            // Offline
+            presenceClass = 'bg-gray-400';
+            presenceTitle = getLastSeenText(c.lastSeen);
+        }
         
         let aiSection = '';
         if (hasAI) {
@@ -1632,16 +1780,19 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
         
         card.innerHTML = `
       <div class="flex items-start justify-between">
-        <div>
-          <h3 class="font-semibold">${c.name}</h3>
-          <p class="text-sm text-gray-400">${c.yearsExperience ?? 0} yrs experience</p>
+        <div class="flex flex-col gap-1">
+          <div class="flex items-center gap-2">
+            <h3 class="font-semibold">${c.name}</h3>
+            <div class="presence-indicator w-2 h-2 rounded-full ${presenceClass}" title="${presenceTitle}"></div>
+          </div>
+          <p class="text-sm text-gray-600">${c.yearsExperience ?? 0} yrs experience</p>
         </div>
-        <span class="rounded bg-blue-500/20 border border-blue-500/30 px-2 py-1 text-xs text-blue-300">${(c.specializations ?? []).join(", ")}</span>
+        <span class="rounded bg-blue-100 border border-blue-300 px-2 py-1 text-xs text-blue-700">${(c.specializations ?? []).join(", ")}</span>
       </div>
-      <p class="text-sm text-gray-300">${c.bio ?? ""}</p>
+      <p class="text-sm text-gray-700">${c.bio ?? ""}</p>
       ${aiSection}
       <div class="flex items-center justify-between mt-2">
-        <span class="text-sm text-gray-400">Rate: ${c.hourlyRate ? `₹${c.hourlyRate}/hr` : "On request"}</span>
+        <span class="text-sm text-gray-600">Rate: ${c.hourlyRate ? `₹${c.hourlyRate}/hr` : "On request"}</span>
         <button id="${btnId}" class="rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-white text-sm font-semibold hover:from-purple-500 hover:to-pink-500">Book</button>
       </div>
     `;
@@ -1656,18 +1807,20 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
 }
 
 async function fetchCoachesForGoal(goal) {
-    // For users: if no goal selected, show ALL coaches
-    // If goal selected, filter by goal
+    // For users: if no goal selected, show ALL approved coaches
+    // If goal selected, filter by goal and approved status
     let q;
     if (!goal) {
         q = query(
             collection(db, "coaches"),
+            where("approved", "==", true), // Only show approved coaches
             orderBy("rating", "desc"),
             limit(50)
         );
     } else {
         q = query(
             collection(db, "coaches"),
+            where("approved", "==", true), // Only show approved coaches
             where("specializations", "array-contains", goal),
             orderBy("rating", "desc"),
             limit(12)
@@ -1689,6 +1842,18 @@ async function fetchCoachesForGoal(goal) {
     });
     items = Array.from(uniqueCoaches.values());
     
+    // Sort by online status first, then by rating
+    items.sort((a, b) => {
+        const aOnline = isCoachOnline(a) ? 1 : 0;
+        const bOnline = isCoachOnline(b) ? 1 : 0;
+        
+        if (aOnline !== bOnline) {
+            return bOnline - aOnline; // Online coaches first
+        }
+        
+        return (b.rating || 0) - (a.rating || 0); // Then by rating
+    });
+    
     // Get AI recommendations if user profile exists (but don't fail if AI errors)
     const user = auth.currentUser;
     let aiRecommendations = null;
@@ -1701,10 +1866,19 @@ async function fetchCoachesForGoal(goal) {
                 const userProfile = userSnap.data();
                 aiRecommendations = await aiService.generateCoachRecommendations(userProfile, items);
                 
-                // Sort coaches by AI match score if available
+                // Sort coaches by AI match score if available, but keep online status priority
                 if (aiRecommendations && aiRecommendations.length > 0) {
                     const scoreMap = new Map(aiRecommendations.map(r => [r.coachId, r.matchScore]));
-                    items.sort((a, b) => (scoreMap.get(b.id) || 0) - (scoreMap.get(a.id) || 0));
+                    items.sort((a, b) => {
+                        const aOnline = isCoachOnline(a) ? 1 : 0;
+                        const bOnline = isCoachOnline(b) ? 1 : 0;
+                        
+                        if (aOnline !== bOnline) {
+                            return bOnline - aOnline; // Online coaches first
+                        }
+                        
+                        return (scoreMap.get(b.id) || 0) - (scoreMap.get(a.id) || 0); // Then by AI score
+                    });
                 }
             }
         } catch (error) {
@@ -1725,7 +1899,7 @@ function renderBookings(items) {
     bookingEmpty.classList.add("hidden");
     
     // Separate pending, active and past bookings
-    const activeBookings = items.filter(b => b.status === 'pending' || b.status === 'confirmed' || b.status === 'active');
+    const activeBookings = items.filter(b => b.status === 'pending' || b.status === 'confirmed' || b.status === 'reviewing' || b.status === 'active');
     const pastBookings = items.filter(b => b.status === 'completed' || b.status === 'cancelled');
     
     // Render Active Bookings Section
@@ -1753,12 +1927,12 @@ function renderBookings(items) {
         const pastSection = document.createElement("div");
         pastSection.className = "mt-6";
         pastSection.innerHTML = `
-            <button id="toggle-past-bookings" class="w-full flex items-center justify-between text-left p-3 rounded-lg border border-gray-700/50 bg-gray-900/30 hover:bg-gray-800/50 transition-colors mb-3">
-                <h3 class="text-lg font-semibold text-gray-400 flex items-center gap-2">
+            <button id="toggle-past-bookings" class="w-full flex items-center justify-between text-left p-3 rounded-lg border border-gray-300 bg-gray-50 hover:bg-gray-100 transition-colors mb-3">
+                <h3 class="text-lg font-semibold text-gray-700 flex items-center gap-2">
                     <span class="inline-block w-2 h-2 bg-gray-500 rounded-full"></span>
                     Past Bookings (${pastBookings.length})
                 </h3>
-                <svg id="past-bookings-chevron" class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg id="past-bookings-chevron" class="w-5 h-5 text-gray-600 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
                 </svg>
             </button>
@@ -1789,7 +1963,7 @@ function createBookingCard(b, isActive) {
         confirmed: 'border-emerald-500/30 bg-emerald-500/5',
         active: 'border-emerald-500/30 bg-emerald-500/5',
         scheduled: 'border-blue-500/30 bg-blue-500/5',
-        completed: 'border-gray-700/50 bg-gray-900/30',
+        completed: 'border-gray-300 bg-gray-50',
         cancelled: 'border-red-500/30 bg-red-500/5'
     };
     row.className = `rounded-lg border p-4 flex items-center justify-between gap-4 ${statusColors[b.status] || 'border-gray-700'}`;
@@ -1799,12 +1973,13 @@ function createBookingCard(b, isActive) {
     const deleteBtnId = `delete-${b.id}`;
     const joinBtnId = `join-${b.id}`;
     const statusBadges = {
-        pending: '<span class="inline-block px-2 py-1 rounded text-xs bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">⏳ Pending Confirmation</span>',
-        confirmed: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">✓ Confirmed</span>',
-        active: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">🟢 Active</span>',
-        scheduled: '<span class="inline-block px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30">📅 Scheduled</span>',
-        completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-700/50 text-gray-400">✓ Completed</span>',
-        cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 border border-red-500/30">✕ Cancelled</span>'
+        pending: '<span class="inline-block px-2 py-1 rounded text-xs bg-yellow-500/20 text-yellow-600 border border-yellow-500/30">⏳ Pending Confirmation</span>',
+        confirmed: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-600 border border-emerald-500/30">✓ Confirmed</span>',
+        reviewing: '<span class="inline-block px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-600 border border-blue-500/30">👁️ Coach Reviewing</span>',
+        active: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-600 border border-emerald-500/30">🟢 Active</span>',
+        scheduled: '<span class="inline-block px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-600 border border-blue-500/30">📅 Scheduled</span>',
+        completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-200 text-gray-700 border border-gray-300">✓ Completed</span>',
+        cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-600 border border-red-500/30">✕ Cancelled</span>'
     };
     
     // Check if scheduled time has arrived (allow joining 5 minutes early)
@@ -1812,25 +1987,25 @@ function createBookingCard(b, isActive) {
     const scheduledTime = b.scheduledAt?.toMillis?.() ?? now;
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
     
-    // Show Join button if confirmed OR active (so both user and coach can join), has link, and time has arrived
-    const showJoinButton = (b.status === 'confirmed' || b.status === 'active') && b.meetingLink && canJoinYet;
+    // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
+    const showJoinButton = (b.status === 'confirmed' || b.status === 'active' || b.status === 'reviewing') && b.meetingLink && canJoinYet;
     const showCancelButton = isActive && b.status === "pending";
-    // Show End button only if time has arrived (canJoinYet) and status is confirmed/active
-    const showEndButton = isActive && (b.status === "confirmed" || b.status === "active") && canJoinYet;
+    // Show End button only if time has arrived (canJoinYet) and status is confirmed/reviewing/active
+    const showEndButton = isActive && (b.status === "confirmed" || b.status === "reviewing" || b.status === "active") && canJoinYet;
     const showDeleteButton = !isActive && (b.status === "completed" || b.status === "cancelled");
     
     row.innerHTML = `
       <div class="flex-1">
-        <p class="font-medium text-white">${b.coachName ?? b.coachId}</p>
-        <p class="text-sm text-gray-400 mt-1">Goal: ${b.goal}</p>
-        ${b.status === 'active' ? '<p class="text-xs text-emerald-400 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-500 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>`}
+        <p class="font-medium text-gray-900">${b.coachName ?? b.coachId}</p>
+        <p class="text-sm text-gray-600 mt-1">Goal: ${b.goal}</p>
+        ${b.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-600 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>`}
       </div>
       <div class="flex items-center gap-3">
         ${statusBadges[b.status] || ''}
         ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${b.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
         ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ""}
         ${showCancelButton ? `<button id="${cancelBtnId}" class="rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-1.5 text-red-400 text-xs font-medium hover:bg-red-500/20">Cancel</button>` : ""}
-        ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-600/50 bg-gray-800/30 px-3 py-1.5 text-gray-400 text-xs font-medium hover:bg-gray-700/50">Delete</button>` : ""}
+        ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100">Delete</button>` : ""}
       </div>
     `;
     
@@ -1945,6 +2120,20 @@ async function fetchBookings() {
     userBookingsListener = onSnapshot(q, (snapshot) => {
         const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         renderBookings(items);
+        
+        // Check for newly confirmed bookings (sound notification for user)
+        snapshot.docChanges().forEach(change => {
+            if (change.type === 'modified') {
+                const booking = { id: change.doc.id, ...change.doc.data() };
+                if (booking.status === 'confirmed' && booking.userId === user.uid) {
+                    showNotificationWithSound(
+                        '🎉 Booking Confirmed!',
+                        `Your session with ${booking.coachName || 'your coach'} has been confirmed!`,
+                        'bookingConfirmed'
+                    );
+                }
+            }
+        });
     }, (error) => {
         console.error('User bookings listener error:', error);
     });
@@ -2448,11 +2637,11 @@ function renderWeeklyActivityChart(weeklyActivity) {
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-40 relative">
-                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-emerald-600 to-emerald-400' : 'bg-gradient-to-t from-cyan-600 to-cyan-400'} rounded-t transition-all duration-500 ${isToday ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-gray-950' : ''}" 
+                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-slate-700 via-slate-600 to-slate-500 shadow-lg shadow-slate-500/30' : 'bg-gradient-to-t from-slate-400 via-slate-300 to-slate-200'} rounded-lg transition-all duration-500" 
                          style="height: ${heightPercent}%"></div>
-                    ${d.total > 0 ? `<span class="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-white font-semibold">${d.total}</span>` : ''}
+                    ${d.total > 0 ? `<span class="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-slate-700 font-semibold">${d.total}</span>` : ''}
                 </div>
-                <span class="text-xs ${isToday ? 'text-emerald-400 font-semibold' : 'text-gray-400'}">${d.day}</span>
+                <span class="text-xs ${isToday ? 'text-slate-700 font-semibold' : 'text-slate-500'}">${d.day}</span>
             </div>
         `;
     }).join('');
@@ -2551,47 +2740,47 @@ function renderActivitySummary(recentActivity, streak, totalAiWorkouts) {
     if (!container) return;
 
     const streakSection = `
-        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-orange-900/30 to-yellow-900/30 rounded-lg border border-orange-500/30">
+        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-orange-50 to-yellow-50 rounded-lg border border-orange-200">
             <div class="flex items-center gap-3">
                 <span class="text-2xl">🔥</span>
                 <div>
-                    <p class="text-sm font-semibold text-white">Current Streak</p>
-                    <p class="text-xs text-gray-400">Keep the momentum going!</p>
+                    <p class="text-sm font-semibold text-gray-900">Current Streak</p>
+                    <p class="text-xs text-gray-600">Keep the momentum going!</p>
                 </div>
             </div>
             <div class="text-right">
-                <span class="text-2xl font-bold text-orange-400">${streak}</span>
-                <p class="text-xs text-orange-300">days</p>
+                <span class="text-2xl font-bold text-orange-600">${streak}</span>
+                <p class="text-xs text-orange-700">days</p>
             </div>
         </div>
     `;
 
     const aiWorkoutsSection = `
-        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-purple-900/30 to-indigo-900/30 rounded-lg border border-purple-500/30">
+        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
             <div class="flex items-center gap-3">
                 <span class="text-2xl">🤖</span>
                 <div>
-                    <p class="text-sm font-semibold text-white">AI Workouts Generated</p>
-                    <p class="text-xs text-gray-400">Personalized plans created</p>
+                    <p class="text-sm font-semibold text-gray-900">AI Workouts Generated</p>
+                    <p class="text-xs text-gray-600">Personalized plans created</p>
                 </div>
             </div>
             <div class="text-right">
-                <span class="text-2xl font-bold text-purple-400">${totalAiWorkouts}</span>
-                <p class="text-xs text-purple-300">total</p>
+                <span class="text-2xl font-bold text-purple-600">${totalAiWorkouts}</span>
+                <p class="text-xs text-purple-700">total</p>
             </div>
         </div>
     `;
 
     const activityListSection = recentActivity.length > 0 ? `
         <div class="mt-4">
-            <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h4>
+            <h4 class="text-sm font-semibold text-gray-700 mb-3">Recent Activity</h4>
             <div class="space-y-2">
                 ${recentActivity.map(a => `
-                    <div class="flex items-center gap-3 p-2 rounded-lg bg-gray-800/30 hover:bg-gray-800/50 transition-colors">
+                    <div class="flex items-center gap-3 p-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
                         <span class="text-lg">${a.icon}</span>
                         <div class="flex-1 min-w-0">
-                            <p class="text-sm text-white truncate">${a.title}</p>
-                            <p class="text-xs text-gray-400">${a.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                            <p class="text-sm text-gray-900 truncate">${a.title}</p>
+                            <p class="text-xs text-gray-600">${a.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                         </div>
                         <span class="text-xs px-2 py-1 rounded ${
                             a.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
@@ -3016,11 +3205,11 @@ function renderCoachWeeklyChart(weeklyActivity) {
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-32 relative">
-                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-emerald-600 to-emerald-400 ring-2 ring-emerald-400 ring-offset-2 ring-offset-gray-950' : 'bg-gradient-to-t from-emerald-700/60 to-emerald-500/60'} rounded-t transition-all duration-500" 
+                    <div class="w-full ${isToday ? 'bg-gradient-to-t from-slate-700 via-slate-600 to-slate-500 shadow-lg shadow-slate-500/30' : 'bg-gradient-to-t from-slate-400 via-slate-300 to-slate-200'} rounded-lg transition-all duration-500" 
                          style="height: ${Math.max(heightPercent, d.count > 0 ? 10 : 0)}%"></div>
-                    ${d.count > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-emerald-300 font-semibold">${d.count}</span>` : ''}
+                    ${d.count > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-slate-600 font-semibold">${d.count}</span>` : ''}
                 </div>
-                <span class="text-xs ${isToday ? 'text-emerald-400 font-semibold' : 'text-gray-400'}">${d.day}</span>
+                <span class="text-xs ${isToday ? 'text-slate-700 font-semibold' : 'text-slate-500'}">${d.day}</span>
             </div>
         `;
     }).join('');
@@ -3132,25 +3321,25 @@ function renderCoachPerformanceSummary(data) {
     if (!container) return;
 
     container.innerHTML = `
-        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
-            <span class="text-sm text-gray-400">Total Sessions</span>
-            <span class="text-sm font-semibold text-white">${data.totalSessions}</span>
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <span class="text-sm text-slate-600">Total Sessions</span>
+            <span class="text-sm font-semibold text-slate-800">${data.totalSessions}</span>
         </div>
-        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
-            <span class="text-sm text-gray-400">Total Clients</span>
-            <span class="text-sm font-semibold text-white">${data.totalClients}</span>
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <span class="text-sm text-slate-600">Total Clients</span>
+            <span class="text-sm font-semibold text-slate-800">${data.totalClients}</span>
         </div>
-        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
-            <span class="text-sm text-gray-400">Avg Sessions/Client</span>
-            <span class="text-sm font-semibold text-white">${data.avgSessionsPerClient}</span>
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <span class="text-sm text-slate-600">Avg Sessions/Client</span>
+            <span class="text-sm font-semibold text-slate-800">${data.avgSessionsPerClient}</span>
         </div>
-        <div class="flex items-center justify-between p-2 bg-gray-800/30 rounded-lg">
-            <span class="text-sm text-gray-400">Cancellation Rate</span>
-            <span class="text-sm font-semibold ${data.cancellationRate > 20 ? 'text-red-400' : 'text-emerald-400'}">${data.cancellationRate}%</span>
+        <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <span class="text-sm text-slate-600">Cancellation Rate</span>
+            <span class="text-sm font-semibold ${data.cancellationRate > 20 ? 'text-red-600' : 'text-emerald-600'}">${data.cancellationRate}%</span>
         </div>
-        <div class="flex items-center justify-between p-2 bg-yellow-900/20 rounded-lg border border-yellow-500/20">
-            <span class="text-sm text-yellow-300">Hourly Rate</span>
-            <span class="text-sm font-semibold text-yellow-400">₹${data.hourlyRate.toLocaleString()}</span>
+        <div class="flex items-center justify-between p-3 bg-gradient-to-r from-emerald-50 to-emerald-100 rounded-lg border border-emerald-200">
+            <span class="text-sm text-emerald-700">Hourly Rate</span>
+            <span class="text-sm font-semibold text-emerald-800">₹${data.hourlyRate.toLocaleString()}</span>
         </div>
     `;
 }
@@ -3179,19 +3368,19 @@ function renderClientsNeedingAttention(clients) {
         const daysSinceLastSession = Math.floor((now - client.lastSession) / (1000 * 60 * 60 * 24));
         
         return `
-            <div class="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-red-500/20 hover:border-red-500/40 transition-colors">
+            <div class="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors">
                 <div class="flex items-center gap-3">
-                    <div class="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-400">
+                    <div class="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600">
                         ${client.name.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-white">${client.name}</p>
-                        <p class="text-xs text-gray-400">${client.sessionsCount} total sessions</p>
+                        <p class="text-sm font-medium text-slate-800">${client.name}</p>
+                        <p class="text-xs text-slate-600">${client.sessionsCount} total sessions</p>
                     </div>
                 </div>
                 <div class="text-right">
-                    <p class="text-xs text-red-400 font-medium">${daysSinceLastSession} days ago</p>
-                    <p class="text-xs text-gray-500">Last session</p>
+                    <p class="text-xs text-red-600 font-medium">${daysSinceLastSession} days ago</p>
+                    <p class="text-xs text-slate-500">Last session</p>
                 </div>
             </div>
         `;
@@ -3264,6 +3453,8 @@ async function confirmBooking(bookingId, userEmail) {
         confirmedAt: serverTimestamp()
     });
     
+    console.log('✅ Booking confirmed, will trigger notification to user via listener');
+    
     // Notify user that booking is confirmed
     if (userEmail) {
         await addDoc(collection(db, "notifications"), {
@@ -3328,6 +3519,20 @@ async function fetchCoachBookings() {
             return data;
         });
         renderCoachCalendar(items);
+        
+        // Check for new pending bookings (sound notification for coach)
+        snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+                const booking = { id: change.doc.id, ...change.doc.data() };
+                if (booking.status === 'pending' && booking.coachId === currentCoachId) {
+                    showNotificationWithSound(
+                        '🔔 New Booking Request!',
+                        `${booking.userName || booking.userEmail} wants to book a ${booking.goal} session`,
+                        'newBooking'
+                    );
+                }
+            }
+        });
     }, (error) => {
         console.error('Bookings listener error:', error);
     });
@@ -3359,15 +3564,21 @@ function renderCoachCalendar(bookings) {
         (b.scheduledAt && b.scheduledAt.toMillis() < now && b.status === 'scheduled')
     );
     
-    // Render Pending Requests
+    // Render Pending Requests - PRIORITY SECTION
     if (pendingBookings.length > 0) {
         const pendingSection = document.createElement("div");
-        pendingSection.className = "mb-6";
+        pendingSection.className = "mb-8 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-xl border-2 border-yellow-300 shadow-lg";
         pendingSection.innerHTML = `
-            <h3 class="text-lg font-semibold text-yellow-400 mb-3 flex items-center gap-2">
-                <span class="inline-block w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></span>
-                Pending Requests (${pendingBookings.length})
-            </h3>
+            <div class="mb-4 flex items-center justify-between">
+                <h3 class="text-xl font-bold text-transparent bg-gradient-to-r from-yellow-600 to-orange-600 bg-clip-text flex items-center gap-2">
+                    <span class="inline-block w-3 h-3 bg-yellow-500 rounded-full animate-pulse shadow-lg"></span>
+                    🔔 Pending Requests (${pendingBookings.length})
+                    <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full border border-red-200 ml-2">Action Required</span>
+                </h3>
+                <div class="text-xs text-yellow-700 bg-yellow-100 px-2 py-1 rounded-full border border-yellow-200">
+                    💡 Confirm bookings to secure sessions
+                </div>
+            </div>
             <div id="pending-sessions-list" class="space-y-3"></div>
         `;
         coachCalendar.appendChild(pendingSection);
@@ -3445,12 +3656,12 @@ function renderCoachCalendar(bookings) {
         const pastSection = document.createElement("div");
         pastSection.className = "mt-6";
         pastSection.innerHTML = `
-            <button id="toggle-past-sessions" class="w-full flex items-center justify-between text-left p-3 rounded-lg border border-gray-700/50 bg-gray-900/30 hover:bg-gray-800/50 transition-colors mb-3">
-                <h3 class="text-lg font-semibold text-gray-400 flex items-center gap-2">
+            <button id="toggle-past-sessions" class="w-full flex items-center justify-between text-left p-3 rounded-lg border border-gray-300 bg-gray-50 hover:bg-gray-100 transition-colors mb-3">
+                <h3 class="text-lg font-semibold text-gray-700 flex items-center gap-2">
                     <span class="inline-block w-2 h-2 bg-gray-500 rounded-full"></span>
                     Past Sessions (${pastBookings.length})
                 </h3>
-                <svg id="past-sessions-chevron" class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg id="past-sessions-chevron" class="w-5 h-5 text-gray-600 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
                 </svg>
             </button>
@@ -3509,7 +3720,7 @@ function createCoachBookingCard(booking, category) {
         confirmed: 'border-emerald-500/30 bg-emerald-500/5',
         active: 'border-emerald-500/30 bg-emerald-500/5',
         scheduled: 'border-blue-500/30 bg-blue-500/5',
-        completed: 'border-gray-700/50 bg-gray-900/30',
+        completed: 'border-gray-300 bg-gray-50',
         cancelled: 'border-red-500/30 bg-red-500/5'
     };
     
@@ -3525,12 +3736,12 @@ function createCoachBookingCard(booking, category) {
     const joinBtnId = `coach-join-${booking.id}`;
     
     const statusBadges = {
-        pending: '<span class="inline-block px-2 py-1 rounded text-xs bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">⏳ Pending</span>',
-        confirmed: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">✓ Confirmed</span>',
-        active: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">🟢 Active</span>',
-        scheduled: '<span class="inline-block px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30">📅 Scheduled</span>',
-        completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-700/50 text-gray-400">✓ Completed</span>',
-        cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 border border-red-500/30">✕ Cancelled</span>'
+        pending: '<span class="inline-block px-2 py-1 rounded text-xs bg-yellow-500/20 text-yellow-600 border border-yellow-500/30">⏳ Pending</span>',
+        confirmed: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-600 border border-emerald-500/30">✓ Confirmed</span>',
+        active: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-600 border border-emerald-500/30">🟢 Active</span>',
+        scheduled: '<span class="inline-block px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-600 border border-blue-500/30">📅 Scheduled</span>',
+        completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-200 text-gray-700 border border-gray-300">✓ Completed</span>',
+        cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-600 border border-red-500/30">✕ Cancelled</span>'
     };
     
     // Check if scheduled time has arrived (allow joining 5 minutes early)
@@ -3539,25 +3750,25 @@ function createCoachBookingCard(booking, category) {
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
     
     const showConfirmButton = booking.status === 'pending' && category !== 'past';
-    // Show Join button if confirmed OR active (so both user and coach can join), has link, and time has arrived
-    const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active') && booking.meetingLink && category !== 'past' && canJoinYet;
-    // Show End button only if time has arrived (canJoinYet) and status is confirmed/active
-    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'active') && canJoinYet;
+    // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
+    const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active' || booking.status === 'reviewing') && booking.meetingLink && category !== 'past' && canJoinYet;
+    // Show End button only if time has arrived (canJoinYet) and status is confirmed/reviewing/active
+    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'reviewing' || booking.status === 'active') && canJoinYet;
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
     
     card.innerHTML = `
         <div class="flex items-center justify-between">
             <div class="flex-1">
-                <p class="font-medium text-white">${booking.userName || booking.userEmail || 'User'}</p>
-                <p class="text-sm text-gray-400 mt-1">Goal: ${booking.goal}</p>
-                ${booking.status === 'active' ? '<p class="text-xs text-emerald-400 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-500 mt-1">🕐 ${time}</p>`}
+                <p class="font-medium text-gray-800">${booking.userName || booking.userEmail || 'User'}</p>
+                <p class="text-sm text-gray-600 mt-1">Goal: ${booking.goal}</p>
+                ${booking.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-600 mt-1">🕐 ${time}</p>`}
             </div>
             <div class="flex items-center gap-2">
                 ${statusBadges[booking.status] || ''}
                 ${showConfirmButton ? `<button id="${confirmBtnId}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500">Confirm Booking</button>` : ''}
                 ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${booking.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
                 ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ''}
-                ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-600/50 bg-gray-800/30 px-3 py-1.5 text-gray-400 text-xs font-medium hover:bg-gray-700/50">Delete</button>` : ''}
+                ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100">Delete</button>` : ''}
             </div>
         </div>
     `;
@@ -3582,30 +3793,32 @@ function createCoachBookingCard(booking, category) {
         }, 0);
     }
     
-    // Add event listener for join button
+    // Add event listener for join button (COACH)
     if (showJoinButton) {
         setTimeout(() => {
             const joinBtn = card.querySelector(`#${joinBtnId}`);
             joinBtn?.addEventListener('click', async () => {
                 joinBtn.disabled = true;
-                joinBtn.innerHTML = 'Joining...';
+                joinBtn.innerHTML = 'Starting Review...';
                 try {
-                    // Only mark session as active if it's not already active
-                    if (booking.status !== 'active') {
-                        await updateDoc(doc(db, "bookings", booking.id), { 
-                            status: "active",
-                            joinedAt: serverTimestamp()
-                        });
-                    }
-                    // Start embedded video call (coach joins as moderator)
-                    const roomName = booking.meetingId || booking.meetingLink.split('/').pop().split('#')[0];
-                    const title = `Session with ${booking.userName || 'User'}`;
-                    startEmbeddedVideoCall(booking.id, roomName, title, true);
-                } catch (e) {
-                    console.error('Failed to join session:', e);
-                    alert('Failed to join session: ' + e.message);
+                    // Update booking status to "reviewing" so user knows coach is preparing
+                    await updateDoc(doc(db, "bookings", booking.id), { 
+                        status: "reviewing",
+                        reviewStartedAt: serverTimestamp()
+                    });
+                    
+                    // Show pre-session review modal for coach
+                    showPreSessionReview(booking);
+                    
+                    // Re-enable button (will be updated by real-time listener)
                     joinBtn.disabled = false;
-                    joinBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
+                    joinBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
+                    
+                } catch (e) {
+                    console.error('Failed to start review:', e);
+                    alert('Failed to start review: ' + e.message);
+                    joinBtn.disabled = false;
+                    joinBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
                 }
             });
         }, 0);
@@ -4324,16 +4537,97 @@ generateWorkoutBtn.addEventListener("click", async () => {
         }
         
         const userProfile = userSnap.data();
-        const workout = await aiService.generatePersonalizedWorkout(userProfile);
+        
+        // Get recent workouts to avoid repetition
+        let recentWorkouts = [];
+        try {
+            // Use the same collection as the display function
+            const recentWorkoutsQuery = query(
+                collection(db, 'workoutSessions'),
+                where('userId', '==', user.uid),
+                orderBy('completedAt', 'desc'),
+                limit(3)
+            );
+            const recentWorkoutsSnap = await getDocs(recentWorkoutsQuery);
+            recentWorkouts = recentWorkoutsSnap.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    exercises: data.exercises || [],
+                    coachNotes: data.coachNotes || '',
+                    completedAt: data.completedAt,
+                    goal: data.goal || 'general fitness'
+                };
+            });
+            console.log('📊 Retrieved recent workouts for AI generation:', recentWorkouts.length);
+            if (recentWorkouts.length > 0) {
+                console.log('📝 Sample recent workout:', JSON.stringify(recentWorkouts[0], null, 2));
+            }
+        } catch (error) {
+            console.warn('Could not fetch recent workouts:', error.message);
+            // Fallback to ai_workouts if workoutSessions fails
+            try {
+                const fallbackQuery = query(
+                    collection(db, 'ai_workouts'),
+                    where('userId', '==', user.uid),
+                    orderBy('createdAt', 'desc'),
+                    limit(3)
+                );
+                const fallbackSnap = await getDocs(fallbackQuery);
+                recentWorkouts = fallbackSnap.docs.map(doc => doc.data().workout);
+            } catch (fallbackError) {
+                console.warn('Fallback workout fetch also failed:', fallbackError.message);
+            }
+        }
+        
+        // Use saved AI analysis if available for personalized workout
+        let workout;
+        console.log('🤖 Determining workout generation method...');
+        if (savedAIAnalysis && (Date.now() - savedAIAnalysis.timestamp < 30 * 60 * 1000)) { // 30 minutes
+            console.log('📋 Using saved AI analysis for workout generation');
+            console.log('🔍 AI Analysis data:', {
+                hasAnalysis: !!savedAIAnalysis.analysis,
+                hasUserProfile: !!savedAIAnalysis.userProfile,
+                sessionGoal: savedAIAnalysis.sessionGoal
+            });
+            workout = await aiService.generateWorkoutFromAnalysis(userProfile, savedAIAnalysis);
+        } else {
+            console.log('🆕 Generating new workout with recent workout context. Recent workouts:', recentWorkouts.length);
+            console.log('🔍 AI Service check:', {
+                hasAIService: !!aiService,
+                methodExists: typeof aiService.generatePersonalizedWorkoutWithHistory === 'function',
+                userProfile: userProfile.goal || 'no goal'
+            });
+            workout = await aiService.generatePersonalizedWorkoutWithHistory(userProfile, recentWorkouts);
+            console.log('✅ AI workout generation completed:', {
+                workoutReceived: !!workout,
+                workoutType: Array.isArray(workout) ? 'array' : typeof workout,
+                workoutLength: workout?.length || 0,
+                firstExercise: workout?.[0] || 'none'
+            });
+        }
         
         renderAIWorkout(workout);
         
-        // Save workout to Firestore
-        await addDoc(collection(db, "ai_workouts"), {
-            userId: user.uid,
-            workout: workout,
-            createdAt: serverTimestamp()
-        });
+        // Save workout to history for immediate future variation
+        try {
+            await addDoc(collection(db, 'ai_workouts'), {
+                userId: user.uid,
+                workout: {
+                    exercises: workout,
+                    generatedAt: new Date(),
+                    userProfile: {
+                        goal: userProfile.goal,
+                        heightCm: userProfile.heightCm,
+                        weightKg: userProfile.weightKg
+                    }
+                },
+                createdAt: new Date(),
+                timestamp: Date.now()
+            });
+            console.log('✅ Workout saved to ai_workouts for immediate variation tracking');
+        } catch (error) {
+            console.warn('Could not save workout to history:', error.message);
+        }
         
     } catch (error) {
         console.error('Failed to generate workout:', error);
@@ -4492,6 +4786,511 @@ coachDropdown?.addEventListener("click", (e) => {
     e.stopPropagation();
 });
 
+// Presence tracking functions
+async function updatePresence(isOnline = true) {
+    if (!auth.currentUser || userType !== 'coach') return;
+    
+    try {
+        const coachRef = doc(db, "coaches", currentCoachId || auth.currentUser.uid);
+        await updateDoc(coachRef, {
+            isOnline: isOnline,
+            lastSeen: serverTimestamp()
+        });
+        console.log('📡 Updated coach presence:', isOnline ? 'ONLINE' : 'OFFLINE');
+    } catch (error) {
+        console.error('❌ Error updating presence:', error);
+    }
+}
+
+function startPresenceTracking() {
+    if (userType !== 'coach' || !auth.currentUser) return;
+    
+    // Clear any existing heartbeat
+    if (presenceHeartbeat) {
+        clearInterval(presenceHeartbeat);
+    }
+    
+    // Set initial online status
+    updatePresence(true);
+    
+    // Send heartbeat every 30 seconds
+    presenceHeartbeat = setInterval(() => {
+        updatePresence(true);
+    }, ONLINE_PRESENCE_INTERVAL);
+    
+    // Set offline on page unload
+    window.addEventListener('beforeunload', () => {
+        updatePresence(false);
+    });
+    
+    // Handle visibility changes (tab switching, etc.)
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            updatePresence(false);
+        } else {
+            updatePresence(true);
+        }
+    });
+    
+    console.log('🟢 Coach presence tracking started');
+}
+
+function stopPresenceTracking() {
+    if (presenceHeartbeat) {
+        clearInterval(presenceHeartbeat);
+        presenceHeartbeat = null;
+    }
+    
+    if (userType === 'coach' && auth.currentUser) {
+        updatePresence(false);
+    }
+    
+    console.log('🔴 Coach presence tracking stopped');
+}
+
+function startCoachPresenceListener() {
+    if (userType !== 'user') return; // Only for users viewing coaches
+    
+    // Clean up existing listener
+    if (coachPresenceListener) {
+        coachPresenceListener();
+    }
+    
+    const q = query(collection(db, "coaches"));
+    coachPresenceListener = onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+            if (change.type === 'modified') {
+                const coachData = { id: change.doc.id, ...change.doc.data() };
+                updateCoachPresenceUI(coachData);
+            }
+        });
+    });
+    
+    console.log('👁️ Coach presence listener started');
+}
+
+function updateCoachPresenceUI(coachData) {
+    const coachCard = document.querySelector(`[data-coach-id="${coachData.id}"]`);
+    if (!coachCard) return;
+    
+    const presenceIndicator = coachCard.querySelector('.presence-indicator');
+    if (!presenceIndicator) return;
+    
+    const isOnline = isCoachOnline(coachData);
+    
+    if (isOnline) {
+        presenceIndicator.classList.remove('bg-gray-400');
+        presenceIndicator.classList.add('bg-green-500');
+        presenceIndicator.title = 'Online now';
+    } else {
+        presenceIndicator.classList.remove('bg-green-500');
+        presenceIndicator.classList.add('bg-gray-400');
+        
+        const lastSeen = getLastSeenText(coachData.lastSeen);
+        presenceIndicator.title = lastSeen;
+    }
+}
+
+function isCoachOnline(coachData) {
+    // If presence fields don't exist, return null (unknown status)
+    if (!coachData.hasOwnProperty('isOnline') || !coachData.hasOwnProperty('lastSeen')) {
+        return null;
+    }
+    
+    if (!coachData.isOnline) return false;
+    if (!coachData.lastSeen) return false;
+    
+    const now = new Date();
+    const lastSeen = coachData.lastSeen.toDate ? coachData.lastSeen.toDate() : new Date(coachData.lastSeen);
+    const timeDiff = now - lastSeen;
+    
+    return timeDiff < OFFLINE_TIMEOUT;
+}
+
+function getLastSeenText(lastSeen) {
+    if (!lastSeen) return 'Status: N/A';
+    
+    const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen);
+    const now = new Date();
+    const diffMs = now - lastSeenDate;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Last seen: Just now';
+    if (diffMins < 60) return `Last seen: ${diffMins}m ago`;
+    if (diffHours < 24) return `Last seen: ${diffHours}h ago`;
+    if (diffDays < 7) return `Last seen: ${diffDays}d ago`;
+    return 'Last seen: Over a week ago';
+}
+
+// Notification sounds for booking events
+const notificationSounds = {
+    newBooking: () => {
+        // Create notification sound for new booking (coach)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Pleasant chime sound for new booking
+        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(1000, audioContext.currentTime + 0.1);
+        oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.3);
+        
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+        
+        console.log('🔔 New booking notification sound played');
+    },
+    
+    bookingConfirmed: () => {
+        // Create success sound for booking confirmation (user)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Success ding sound for booking confirmation
+        oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
+        oscillator.frequency.setValueAtTime(659.25, audioContext.currentTime + 0.1); // E5
+        oscillator.frequency.setValueAtTime(783.99, audioContext.currentTime + 0.2); // G5
+        
+        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.4);
+        
+        console.log('✅ Booking confirmed notification sound played');
+    }
+};
+
+// Show browser notification with sound
+function showNotificationWithSound(title, message, soundType) {
+    // Play sound
+    try {
+        if (notificationSounds[soundType]) {
+            notificationSounds[soundType]();
+        }
+    } catch (error) {
+        console.warn('Could not play notification sound:', error);
+    }
+    
+    // Show browser notification if permission granted
+    if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(title, {
+            body: message,
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            tag: 'fitness-booking'
+        });
+    }
+    
+    console.log('📢 Notification shown:', title, '-', message);
+}
+
+// Pre-Session Review Functions
+async function showPreSessionReview(booking) {
+    currentReviewBooking = booking;
+    
+    // Update UI with booking info
+    document.getElementById('review-user-name').textContent = booking.userName || booking.userEmail;
+    document.getElementById('review-user-goal').textContent = booking.goal || 'No specific goal';
+    
+    // Show the modal
+    preSessionModal.classList.remove('hidden');
+    
+    // Load user profile data
+    await loadUserDataForReview(booking);
+    
+    // Generate AI analysis
+    await generateAISessionAnalysis(booking);
+    
+    // Load session history
+    await loadSessionHistoryForReview(booking);
+}
+
+async function loadUserDataForReview(booking) {
+    try {
+        // Get user profile data
+        const userProfileRef = doc(db, 'users', booking.userId);
+        const userProfileSnap = await getDoc(userProfileRef);
+        
+        if (userProfileSnap.exists()) {
+            const userData = userProfileSnap.data();
+            document.getElementById('review-user-height').textContent = userData.height ? `${userData.height} cm` : 'Not specified';
+            document.getElementById('review-user-weight').textContent = userData.weight ? `${userData.weight} kg` : 'Not specified';
+            document.getElementById('review-user-requirements').textContent = userData.requirements || 'None specified';
+        }
+    } catch (error) {
+        console.error('Error loading user data for review:', error);
+    }
+}
+
+async function generateAISessionAnalysis(booking) {
+    try {
+        aiAnalysisLoading.classList.remove('hidden');
+        aiAnalysisContent.classList.add('hidden');
+        
+        // Get user's past booking sessions for context (same as session history)
+        let sessionHistory = [];
+        try {
+            const pastBookingsQuery = query(
+                collection(db, 'bookings'),
+                where('userId', '==', booking.userId),
+                where('coachId', '==', currentCoachId),
+                where('status', '==', 'completed'),
+                orderBy('createdAt', 'desc'),
+                limit(5)
+            );
+            const pastBookings = await getDocs(pastBookingsQuery);
+            sessionHistory = pastBookings.docs.map(doc => doc.data());
+            console.log('✅ Retrieved session history:', sessionHistory.length, 'sessions');
+        } catch (indexError) {
+            console.warn('⚠️ Firestore index missing for booking history query. Trying alternative approach...');
+            // Try without orderBy to avoid index requirement
+            try {
+                const simpleQuery = query(
+                    collection(db, 'bookings'),
+                    where('userId', '==', booking.userId),
+                    where('coachId', '==', currentCoachId),
+                    where('status', '==', 'completed'),
+                    limit(5)
+                );
+                const pastBookings = await getDocs(simpleQuery);
+                sessionHistory = pastBookings.docs.map(doc => doc.data());
+                console.log('✅ Retrieved session history without ordering:', sessionHistory.length, 'sessions');
+            } catch (fallbackError) {
+                console.warn('⚠️ Could not retrieve session history:', fallbackError.message);
+                sessionHistory = [];
+            }
+        }
+        
+        // Get user profile for context
+        const userProfileRef = doc(db, 'users', booking.userId);
+        const userProfileSnap = await getDoc(userProfileRef);
+        const userProfile = userProfileSnap.exists() ? userProfileSnap.data() : {};
+        
+        // Create prompt for AI analysis with default values
+        const analysisPrompt = `As a fitness coach, provide a brief pre-session analysis for this client (MAX 400 words):
+
+CLIENT:
+- Goal: ${booking.goal}
+- Height: ${userProfile.heightCm || userProfile.height || 170} cm (${userProfile.heightCm || userProfile.height ? 'actual' : 'default average'})
+- Weight: ${userProfile.weightKg || userProfile.weight || 70} kg (${userProfile.weightKg || userProfile.weight ? 'actual' : 'default average'})
+- Age: ${userProfile.age || 30} (${userProfile.age ? 'actual' : 'default average'})
+- Requirements: ${userProfile.requirements || 'None'}
+- Past Sessions with You: ${sessionHistory.length} completed sessions
+${sessionHistory.length > 0 ? 
+    '\nPAST SESSIONS:\n' + sessionHistory.map((s, i) => {
+        const date = new Date(s.scheduledAt?.toMillis?.() || s.createdAt?.toMillis?.()).toLocaleDateString();
+        return `${i+1}. ${s.goal} - ${date}${s.coachNotes ? '\n   Your Notes: ' + s.coachNotes : ''}`;
+    }).join('\n') :
+    '\nNo previous sessions with this client yet.'
+}
+
+Provide CONCISE insights using simple HTML tags:
+
+<div class="space-y-3">
+<div><strong>🎯 Session Focus</strong><br>
+[Key areas to focus on today based on their goal and history]</div>
+
+<div><strong>📊 Past Progress Review</strong><br>
+[Analysis of their session history and your previous coach notes]</div>
+
+<div><strong>⚠️ Key Considerations</strong><br>
+[Important points based on their profile and past sessions]</div>
+
+<div><strong>🔥 Session Strategy</strong><br>
+[How to approach today's session]</div>
+</div>
+
+Return ONLY the content between the <div class="space-y-3"> tags, without any code block markers or extra formatting.`;
+        
+        // Get AI analysis
+        console.log('🤖 Starting AI analysis with prompt:', analysisPrompt.substring(0, 100) + '...');
+        console.log('📊 User profile:', userProfile);
+        console.log('📚 Session history:', sessionHistory);
+        
+        const analysis = await aiService.generateCoachingInsights({
+            prompt: analysisPrompt,
+            userProfile: userProfile,
+            workoutHistory: sessionHistory, // Using session history instead of workout history
+            sessionGoal: booking.goal
+        });
+        
+        // Save AI analysis for workout generation with enhanced user profile
+        savedAIAnalysis = {
+            analysis: analysis,
+            userProfile: {
+                ...userProfile,
+                heightCm: userProfile.heightCm || userProfile.height || 170,
+                weightKg: userProfile.weightKg || userProfile.weight || 70,
+                age: userProfile.age || 30
+            },
+            sessionGoal: booking.goal,
+            sessionHistory: sessionHistory,
+            timestamp: Date.now()
+        };
+        
+        console.log('✅ AI analysis received and saved:', analysis.substring(0, 100) + '...');
+        
+        // Display the analysis
+        document.getElementById('ai-session-summary').innerHTML = `
+            <div class="space-y-4">
+                <div class="bg-white/70 p-4 rounded-lg border border-emerald-300">
+                    <h4 class="font-semibold text-emerald-700 mb-2">🎯 AI Coaching Insights</h4>
+                    <div class="text-sm text-gray-700 whitespace-pre-wrap">${analysis}</div>
+                </div>
+            </div>
+        `;
+        
+        aiAnalysisLoading.classList.add('hidden');
+        aiAnalysisContent.classList.remove('hidden');
+        
+    } catch (error) {
+        console.error('❌ Error generating AI analysis:', error);
+        console.error('Error type:', error.constructor.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        
+        document.getElementById('ai-session-summary').innerHTML = `
+            <div class="bg-red-50 p-4 rounded-lg border border-red-200">
+                <p class="text-red-700">Failed to generate AI analysis: ${error.message}</p>
+                <p class="text-red-600 text-sm mt-2">Please proceed with manual review. Check console for details.</p>
+            </div>
+        `;
+        aiAnalysisLoading.classList.add('hidden');
+        aiAnalysisContent.classList.remove('hidden');
+    }
+}
+
+async function loadSessionHistoryForReview(booking) {
+    try {
+        // Get past completed bookings with this user
+        const pastBookingsQuery = query(
+            collection(db, 'bookings'),
+            where('userId', '==', booking.userId),
+            where('coachId', '==', currentCoachId),
+            where('status', '==', 'completed'),
+            orderBy('createdAt', 'desc'),
+            limit(5)
+        );
+        const pastBookings = await getDocs(pastBookingsQuery);
+        
+        // Update count display
+        const countElement = document.getElementById('past-sessions-count');
+        if (countElement) {
+            countElement.textContent = `${pastBookings.docs.length} session${pastBookings.docs.length !== 1 ? 's' : ''}`;
+        }
+        
+        if (pastBookings.empty) {
+            document.getElementById('session-history-content').innerHTML = `
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                    <p class="text-blue-700">🆕 This is your first session with this client!</p>
+                </div>
+            `;
+            return;
+        }
+        
+        const historyHtml = pastBookings.docs.map(doc => {
+            const session = doc.data();
+            const date = new Date(session.scheduledAt?.toMillis?.() || session.createdAt?.toMillis?.()).toLocaleDateString();
+            return `
+                <div class="bg-gray-50 p-4 rounded-lg border mb-3">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="font-medium text-gray-800">${session.goal}</p>
+                            <p class="text-sm text-gray-600">${date}</p>
+                            ${session.coachNotes ? `<div class="mt-2 p-2 bg-blue-50 rounded text-sm"><strong>Your Notes:</strong> ${session.coachNotes}</div>` : ''}
+                        </div>
+                        <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Completed</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        document.getElementById('session-history-content').innerHTML = historyHtml;
+        
+    } catch (error) {
+        console.error('Error loading session history:', error);
+        document.getElementById('session-history-content').innerHTML = `
+            <div class="bg-red-50 p-4 rounded-lg border border-red-200">
+                <p class="text-red-700">Failed to load session history.</p>
+            </div>
+        `;
+        
+        const countElement = document.getElementById('past-sessions-count');
+        if (countElement) {
+            countElement.textContent = 'Error loading';
+        }
+    }
+}
+
+async function completeReviewAndJoinSession() {
+    if (!currentReviewBooking) return;
+    
+    try {
+        // Hide review modal
+        preSessionModal.classList.add('hidden');
+        
+        // Save notes if any
+        const notes = coachSessionNotes.value.trim();
+        if (notes) {
+            await updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
+                coachNotes: notes,
+                notesUpdatedAt: serverTimestamp()
+            });
+        }
+        
+        // Update booking status to active
+        await updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
+            status: 'active',
+            joinedAt: serverTimestamp(),
+            reviewCompletedAt: serverTimestamp()
+        });
+        
+        // Start the video call
+        const roomName = currentReviewBooking.meetingId || currentReviewBooking.meetingLink.split('/').pop().split('#')[0];
+        const title = `Session with ${currentReviewBooking.userName || 'User'}`;
+        startEmbeddedVideoCall(currentReviewBooking.id, roomName, title, true);
+        
+        currentReviewBooking = null;
+        
+    } catch (error) {
+        console.error('Error completing review:', error);
+        alert('Failed to start session: ' + error.message);
+    }
+}
+
+function closePreSessionReview() {
+    if (currentReviewBooking) {
+        // Reset booking status back to confirmed
+        updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
+            status: 'confirmed'
+        }).catch(console.error);
+    }
+    
+    preSessionModal.classList.add('hidden');
+    currentReviewBooking = null;
+    coachSessionNotes.value = '';
+}
+
+// Request notification permission
+function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+}
+
 // Auth state changes
 onAuthStateChanged(auth, async (user) => {
     toggleAuthUI(user);
@@ -4499,11 +5298,15 @@ onAuthStateChanged(auth, async (user) => {
         currentUserId = user.uid; // Set global user ID
         console.log('🔑 User authenticated:', user.email, 'UID:', currentUserId);
         
+        // Request notification permission for booking alerts
+        requestNotificationPermission();
+        
         if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
             if (coachId) {
                 // Coach profile exists, load bookings and analytics
                 currentCoachId = coachId;
+                startPresenceTracking(); // Start tracking coach presence
                 await Promise.all([
                     fetchCoachBookings(),
                     loadCoachAnalytics()
@@ -4512,6 +5315,7 @@ onAuthStateChanged(auth, async (user) => {
             // Otherwise show profile setup form
         } else {
             await loadUserProfile(user.uid);
+            startCoachPresenceListener(); // Start listening to coach presence for users
             // Load ALL coaches for users to see
             await Promise.all([
                 fetchWorkoutsForGoal(goalEl.value),
@@ -4529,6 +5333,9 @@ onAuthStateChanged(auth, async (user) => {
         currentUserId = null;
         currentCoachId = null;
         
+        // Stop presence tracking
+        stopPresenceTracking();
+        
         // Clean up listeners on sign out
         if (userBookingsListener) {
             userBookingsListener();
@@ -4541,6 +5348,10 @@ onAuthStateChanged(auth, async (user) => {
         if (notificationsListener) {
             notificationsListener();
             notificationsListener = null;
+        }
+        if (coachPresenceListener) {
+            coachPresenceListener();
+            coachPresenceListener = null;
         }
     }
 });

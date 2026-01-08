@@ -18,13 +18,16 @@ service cloud.firestore {
     
     // Coaches collection - authenticated users can read all coaches
     // Only authenticated users can create/update their own coach profile
+    // Coaches can update their presence status (isOnline, lastSeen)
     // Allow test data creation for development
     match /coaches/{coachId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null && 
                     (request.resource.data.email == request.auth.token.email || isTestData(coachId));
-      allow update, delete: if request.auth != null && 
-                            (resource.data.email == request.auth.token.email || isTestData(coachId));
+      allow update: if request.auth != null && 
+                    (resource.data.email == request.auth.token.email || isTestData(coachId));
+      allow delete: if request.auth != null && 
+                    (resource.data.email == request.auth.token.email || isTestData(coachId));
     }
     
     // Workouts collection - users can read/write their own workouts
