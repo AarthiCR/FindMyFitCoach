@@ -57,7 +57,14 @@ const mainContent = document.getElementById("main-content");
 // Auth gate buttons
 const btnUserLogin = document.getElementById("btn-user-login");
 const btnCoachLogin = document.getElementById("btn-coach-login");
-const btnAdminLogin = document.getElementById("btn-admin-login");
+const btnAdminAccess = document.getElementById("btn-admin-access");
+
+// Admin access modal elements
+const adminAccessModal = document.getElementById("admin-access-modal");
+const adminCodeInput = document.getElementById("admin-code");
+const adminCodeError = document.getElementById("admin-code-error");
+const adminCodeCancel = document.getElementById("admin-code-cancel");
+const adminCodeVerify = document.getElementById("admin-code-verify");
 
 // Admin elements
 const adminAppEl = document.getElementById("admin-app");
@@ -79,6 +86,10 @@ const activityFilter = document.getElementById("activity-filter");
 const userSearch = document.getElementById("user-search");
 const searchUsersBtn = document.getElementById("search-users-btn");
 const usersList = document.getElementById("users-list");
+const refreshCoachesList = document.getElementById("refresh-coaches-list");
+const coachFilter = document.getElementById("coach-filter");
+const coachesList = document.getElementById("coaches-list");
+const coachApprovalStatus = document.getElementById("coach-approval-status");
 
 // Restore userType from localStorage on page load
 let userType = localStorage.getItem('userType') || null; // 'user', 'coach', or 'admin'
@@ -1402,6 +1413,9 @@ async function loadCoachProfile(userEmail) {
             coachDisplayName.textContent = coachData.name || userEmail;
         }
         
+        // Display approval status
+        displayCoachApprovalStatus(coachData.approved);
+        
         // Show dashboard, hide setup
         coachProfileSetup.classList.add("hidden");
         coachDashboard.classList.remove("hidden");
@@ -1531,6 +1545,7 @@ async function saveCoachProfile(user) {
     } else {
         // Create new profile
         coachData.createdAt = serverTimestamp();
+        coachData.approved = false; // Requires admin approval
         await addDoc(collection(db, "coaches"), coachData);
     }
 }
@@ -1656,18 +1671,20 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
 }
 
 async function fetchCoachesForGoal(goal) {
-    // For users: if no goal selected, show ALL coaches
-    // If goal selected, filter by goal
+    // For users: if no goal selected, show ALL approved coaches
+    // If goal selected, filter by goal and approved status
     let q;
     if (!goal) {
         q = query(
             collection(db, "coaches"),
+            where("approved", "==", true),
             orderBy("rating", "desc"),
             limit(50)
         );
     } else {
         q = query(
             collection(db, "coaches"),
+            where("approved", "==", true),
             where("specializations", "array-contains", goal),
             orderBy("rating", "desc"),
             limit(12)
@@ -2523,10 +2540,8 @@ btnCoachLogin.addEventListener("click", () => {
     signInUser();
 });
 
-btnAdminLogin.addEventListener("click", () => {
-    userType = 'admin';
-    localStorage.setItem('userType', 'admin');
-    signInUser();
+btnAdminAccess.addEventListener("click", () => {
+    openAdminAccessModal();
 });
 
 async function signInUser() {
@@ -2775,7 +2790,7 @@ coachProfileForm.addEventListener("submit", async (e) => {
     coachProfileStatus.textContent = "Saving...";
     try {
         await saveCoachProfile(user);
-        coachProfileStatus.textContent = "Profile saved! Loading dashboard...";
+        coachProfileStatus.textContent = "Profile saved! Your account is pending admin approval before you can receive bookings.";
         
         // Reload coach profile to show dashboard
         const coachId = await loadCoachProfile(user.email);
@@ -3016,6 +3031,73 @@ btnAdminSignOut?.addEventListener("click", async () => {
     localStorage.removeItem('userType');
 });
 
+// ========== ADMIN ACCESS CONTROL ==========
+
+// Admin access code (change this to your desired code)
+const ADMIN_ACCESS_CODE = "FIT@COACHADMIN2026"; // Change this to your secure code
+
+/**
+ * Open admin access modal
+ */
+function openAdminAccessModal() {
+    adminCodeInput.value = "";
+    adminCodeError.classList.add("hidden");
+    adminAccessModal.classList.remove("hidden");
+    adminCodeInput.focus();
+}
+
+/**
+ * Close admin access modal
+ */
+function closeAdminAccessModal() {
+    adminAccessModal.classList.add("hidden");
+    adminCodeInput.value = "";
+    adminCodeError.classList.add("hidden");
+}
+
+/**
+ * Verify admin access code and proceed to login
+ */
+function verifyAdminCode() {
+    const enteredCode = adminCodeInput.value.trim();
+    
+    if (enteredCode === ADMIN_ACCESS_CODE) {
+        // Code is correct, proceed with admin login
+        closeAdminAccessModal();
+        userType = 'admin';
+        localStorage.setItem('userType', 'admin');
+        signInUser();
+    } else {
+        // Code is incorrect, show error
+        adminCodeError.classList.remove("hidden");
+        adminCodeInput.value = "";
+        adminCodeInput.focus();
+        
+        // Auto-hide error after 3 seconds
+        setTimeout(() => {
+            adminCodeError.classList.add("hidden");
+        }, 3000);
+    }
+}
+
+// Admin access modal event listeners
+adminCodeCancel?.addEventListener("click", closeAdminAccessModal);
+adminCodeVerify?.addEventListener("click", verifyAdminCode);
+
+// Handle Enter key in admin code input
+adminCodeInput?.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+        verifyAdminCode();
+    }
+});
+
+// Close modal when clicking outside
+adminAccessModal?.addEventListener("click", (e) => {
+    if (e.target === adminAccessModal) {
+        closeAdminAccessModal();
+    }
+});
+
 // ========== ADMIN FUNCTIONS ==========
 
 /**
@@ -3107,9 +3189,12 @@ async function fetchAdminAnalytics() {
             return lastLogin < threeDaysAgo;
         });
         
+        // Count pending coaches
+        const pendingCoaches = coaches.filter(c => c.approved === false).length;
+        
         // Update UI
         totalUsersCount.textContent = users.length;
-        totalCoachesCount.textContent = coaches.length;
+        totalCoachesCount.textContent = `${coaches.length} (${pendingCoaches} pending)`;
         totalBookingsCount.textContent = bookings.length;
         inactiveUsersCount.textContent = inactiveUsers.length;
         usersLast7Days.textContent = `+${usersLast7} in last 7 days`;
@@ -3412,7 +3497,199 @@ function setupAdminEventListeners() {
     });
     
     activityFilter?.addEventListener('change', fetchRecentActivity);
+    
+    // Coach management event listeners
+    refreshCoachesList?.addEventListener('click', fetchCoachesForApproval);
+    coachFilter?.addEventListener('change', fetchCoachesForApproval);
+    
+    // Load coaches initially
+    fetchCoachesForApproval();
 }
+
+/**
+ * Display coach approval status in coach dashboard
+ */
+function displayCoachApprovalStatus(approved) {
+    if (!coachApprovalStatus) return;
+    
+    if (approved) {
+        coachApprovalStatus.innerHTML = `
+            <div class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg">
+                <svg class="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <span class="text-sm font-medium text-green-700 dark:text-green-300">Approved - Visible to Users</span>
+            </div>
+        `;
+    } else {
+        coachApprovalStatus.innerHTML = `
+            <div class="inline-flex items-center gap-2 px-3 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800 rounded-lg">
+                <svg class="w-4 h-4 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="text-sm font-medium text-orange-700 dark:text-orange-300">Pending Admin Approval</span>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Fetch coaches for admin approval management
+ */
+async function fetchCoachesForApproval() {
+    try {
+        const filter = coachFilter?.value || 'all';
+        const coachesRef = collection(db, 'coaches');
+        let q;
+        
+        if (filter === 'pending') {
+            q = query(coachesRef, where('approved', '==', false), orderBy('createdAt', 'desc'));
+        } else if (filter === 'approved') {
+            q = query(coachesRef, where('approved', '==', true), orderBy('createdAt', 'desc'));
+        } else {
+            q = query(coachesRef, orderBy('createdAt', 'desc'));
+        }
+        
+        const snapshot = await getDocs(q);
+        const coaches = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        renderCoachesList(coaches);
+        
+    } catch (error) {
+        console.error('Error fetching coaches:', error);
+        if (coachesList) {
+            coachesList.innerHTML = '<p class="text-sm text-red-500">Error loading coaches</p>';
+        }
+    }
+}
+
+/**
+ * Render coaches list for admin management
+ */
+function renderCoachesList(coaches) {
+    if (!coachesList) return;
+    
+    if (!coaches || coaches.length === 0) {
+        coachesList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 italic">No coaches found</p>';
+        return;
+    }
+    
+    coachesList.innerHTML = coaches.map(coach => {
+        const createdAt = coach.createdAt?.toDate();
+        const createdStr = createdAt ? createdAt.toLocaleDateString() : 'Unknown';
+        const approved = coach.approved;
+        const statusColor = approved ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
+        const statusText = approved ? 'Approved' : 'Pending';
+        
+        return `
+            <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-3 mb-2">
+                            <h4 class="font-medium text-gray-900 dark:text-gray-100">${coach.name || coach.email}</h4>
+                            <span class="text-xs px-2 py-1 rounded-full ${statusColor}">${statusText}</span>
+                        </div>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">${coach.email}</p>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            Experience: ${coach.yearsExperience || 0} years | Rate: $${coach.hourlyRate || 0}/hr
+                        </p>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            Specializations: ${coach.specializations?.join(', ') || 'None'}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 mt-2">Registered: ${createdStr}</p>
+                        ${coach.bio ? `<p class="text-sm text-gray-700 dark:text-gray-300 mt-2 p-2 bg-gray-100 dark:bg-gray-700 rounded">${coach.bio}</p>` : ''}
+                    </div>
+                    <div class="flex flex-col gap-2 ml-4">
+                        ${!approved ? `
+                            <button onclick="approveCoach('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-green-600 hover:bg-green-700 text-white">
+                                Approve
+                            </button>
+                            <button onclick="rejectCoach('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-red-600 hover:bg-red-700 text-white">
+                                Reject
+                            </button>
+                        ` : `
+                            <button onclick="revokeCoachApproval('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-orange-600 hover:bg-orange-700 text-white">
+                                Revoke
+                            </button>
+                        `}
+                        <button onclick="sendManualEmail('${coach.email}', '${coach.name || coach.email}')" 
+                            class="px-3 py-1 text-sm rounded-md bg-blue-600 hover:bg-blue-700 text-white">
+                            Email
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Approve a coach
+ */
+window.approveCoach = async function(coachId) {
+    if (!confirm('Approve this coach? They will become visible to users.')) return;
+    
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: true,
+            approvedAt: serverTimestamp()
+        });
+        
+        alert('Coach approved successfully!');
+        fetchCoachesForApproval();
+        
+    } catch (error) {
+        console.error('Error approving coach:', error);
+        alert('Failed to approve coach');
+    }
+};
+
+/**
+ * Reject a coach
+ */
+window.rejectCoach = async function(coachId) {
+    const reason = prompt('Enter reason for rejection (optional):');
+    if (reason === null) return; // User cancelled
+    
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: false,
+            rejectedAt: serverTimestamp(),
+            rejectionReason: reason || 'No reason provided'
+        });
+        
+        alert('Coach rejected successfully!');
+        fetchCoachesForApproval();
+        
+    } catch (error) {
+        console.error('Error rejecting coach:', error);
+        alert('Failed to reject coach');
+    }
+};
+
+/**
+ * Revoke coach approval
+ */
+window.revokeCoachApproval = async function(coachId) {
+    if (!confirm('Revoke approval for this coach? They will no longer be visible to users.')) return;
+    
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: false,
+            revokedAt: serverTimestamp()
+        });
+        
+        alert('Coach approval revoked successfully!');
+        fetchCoachesForApproval();
+        
+    } catch (error) {
+        console.error('Error revoking coach approval:', error);
+        alert('Failed to revoke coach approval');
+    }
+};
 
 
 // Prevent dropdown from closing when clicking inside
@@ -3442,15 +3719,31 @@ onAuthStateChanged(auth, async (user) => {
                 await fetchAdminAnalytics();
                 setupAdminEventListeners();
             } else {
-                alert('You do not have admin permissions. Please contact the administrator.');
-                userType = 'user';
-                localStorage.setItem('userType', 'user');
-                await loadUserProfile(user.uid);
-                await Promise.all([
-                    fetchWorkoutsForGoal(goalEl.value),
-                    fetchCoachesForGoal(null),
-                    fetchBookings()
-                ]);
+                // If not in admin list, add them automatically since they passed code verification
+                console.log('⚠️ Admin code verified but not in database. Adding to admin list...');
+                try {
+                    await addDoc(collection(db, 'admins'), {
+                        email: user.email,
+                        role: 'admin',
+                        name: user.displayName || user.email,
+                        createdAt: serverTimestamp(),
+                        addedViaCode: true
+                    });
+                    console.log('✅ Admin added to database');
+                    await fetchAdminAnalytics();
+                    setupAdminEventListeners();
+                } catch (error) {
+                    console.error('Error adding admin to database:', error);
+                    alert('Admin access granted but failed to save to database. Please contact support.');
+                    userType = 'user';
+                    localStorage.setItem('userType', 'user');
+                    await loadUserProfile(user.uid);
+                    await Promise.all([
+                        fetchWorkoutsForGoal(goalEl.value),
+                        fetchCoachesForGoal(null),
+                        fetchBookings()
+                    ]);
+                }
             }
         } else if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
