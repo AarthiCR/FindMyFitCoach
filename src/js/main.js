@@ -31,7 +31,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 // Load Firebase configuration from a local, untracked file
-import { firebaseConfig, openaiApiKey } from "../../config/config.js";
+// Note: Increment version number after config changes to bust cache
+import { firebaseConfig, openaiApiKey } from "../../config/config.js?v=2";
 import { AIService } from "../ai/ai-service.js";
 
 // Initialize Firebase services
@@ -4662,14 +4663,42 @@ generateWorkoutBtn.addEventListener("click", async () => {
             });
         }
 
-        renderAIWorkout(workout);
+        // Convert array response to expected workout object format
+        let workoutData;
+        if (Array.isArray(workout)) {
+            console.log('🔄 Converting array workout to object format');
+            workoutData = {
+                title: `${userProfile.goal || 'Fitness'} Workout`,
+                intensity: 'moderate',
+                duration: 30,
+                estimatedCalories: 200,
+                exercises: workout.map(ex => ({
+                    name: ex,
+                    checklistItem: ex
+                })),
+                warmup: {
+                    description: 'Light cardio and dynamic stretches',
+                    checklistItems: ['5 minutes of light cardio', 'Dynamic arm circles', 'Leg swings']
+                },
+                cooldown: {
+                    description: 'Gentle stretching',
+                    checklistItems: ['5 minutes of static stretches', 'Deep breathing']
+                },
+                equipmentNeeded: ['None - Bodyweight only'],
+                aiReasoning: `Personalized workout designed for your ${userProfile.goal || 'fitness'} goals`
+            };
+        } else {
+            workoutData = workout;
+        }
+
+        renderAIWorkout(workoutData);
 
         // Save workout to history for immediate future variation
         try {
             await addDoc(collection(db, 'ai_workouts'), {
                 userId: user.uid,
                 workout: {
-                    exercises: workout,
+                    exercises: Array.isArray(workout) ? workout : (workout.exercises || []),
                     generatedAt: new Date(),
                     userProfile: {
                         goal: userProfile.goal,

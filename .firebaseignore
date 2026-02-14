@@ -1,0 +1,30 @@
+# Firebase specific files
+firebase/
+.firebaserc
+firebase.json
+.firebase/
+
+# Development files
+test-data/
+docs/
+node_modules/
+
+# Git files
+.git/
+.gitignore
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Note: config.js is NOT ignored here so it gets deployed
+# It IS in .gitignore to keep secrets out of git
