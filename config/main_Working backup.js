@@ -31,7 +31,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 // Load Firebase configuration from a local, untracked file
-import { firebaseConfig, openaiApiKey } from "../../config/config.js";
+// Note: Increment version number after config changes to bust cache
+import { firebaseConfig, geminiApiKey, openaiApiKey } from "../../config/config.js?v=4";
 import { AIService } from "../ai/ai-service.js";
 
 // Initialize Firebase services
@@ -39,50 +40,12 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Initialize AI Service
-const aiService = new AIService(openaiApiKey);
+// Initialize AI Service — tries Gemini first, falls back to OpenAI
+const aiService = new AIService({ geminiApiKey, openaiApiKey });
 console.log('🤖 AI Service initialized:', {
-    hasApiKey: !!openaiApiKey,
-    apiKeyLength: openaiApiKey?.length || 0,
-    apiKeyPreview: openaiApiKey ? openaiApiKey.substring(0, 20) + '...' : 'None'
+    hasGeminiKey: !!geminiApiKey,
+    hasOpenAIKey: !!openaiApiKey
 });
-
-// Test AI service on page load
-(async function testAIService() {
-    if (!openaiApiKey) {
-        console.error('❌ No OpenAI API key found! AI features will not work.');
-        console.error('Please add your OpenAI API key to config/config.js');
-        return;
-    }
-    
-    console.log('🧪 Testing AI service connection...');
-    try {
-        // Simple test call with minimal tokens
-        const testResponse = await fetch('https://api.openai.com/v1/models', {
-            headers: {
-                'Authorization': `Bearer ${openaiApiKey}`
-            }
-        });
-        
-        if (testResponse.ok) {
-            console.log('✅ OpenAI API connection successful!');
-        } else {
-            const errorData = await testResponse.json().catch(() => ({}));
-            console.error('❌ OpenAI API test failed:', {
-                status: testResponse.status,
-                error: errorData
-            });
-            
-            if (testResponse.status === 401) {
-                console.error('🔑 API KEY IS INVALID! Please update your OpenAI API key in config/config.js');
-            } else if (testResponse.status === 429) {
-                console.error('💳 API QUOTA EXCEEDED! Your OpenAI account has no credits. Add billing at https://platform.openai.com/account/billing');
-            }
-        }
-    } catch (error) {
-        console.error('❌ AI service test error:', error);
-    }
-})();
 
 // UI elements
 const userMenu = document.getElementById("user-menu");
@@ -91,7 +54,6 @@ const userDisplayName = document.getElementById("user-display-name");
 const userDropdown = document.getElementById("user-dropdown");
 const btnSignIn = document.getElementById("btn-sign-in");
 const btnSignOut = document.getElementById("btn-sign-out");
-const landingHero = document.getElementById("landing-hero");
 const gateEl = document.getElementById("auth-gate");
 const appEl = document.getElementById("app");
 const coachAppEl = document.getElementById("coach-app");
@@ -99,6 +61,43 @@ const editProfileBtn = document.getElementById("edit-profile-btn");
 const cancelEditProfileBtn = document.getElementById("cancel-edit-profile");
 const profileSection = document.getElementById("profile-section");
 const mainContent = document.getElementById("main-content");
+
+// Admin access button
+const btnUserLogin = document.getElementById("btn-user-login");
+const btnCoachLogin = document.getElementById("btn-coach-login");
+const btnAdminAccess = document.getElementById("btn-admin-access");
+
+// Admin access modal elements
+const adminAccessModal = document.getElementById("admin-access-modal");
+const adminCodeInput = document.getElementById("admin-code");
+const adminCodeError = document.getElementById("admin-code-error");
+const adminCodeCancel = document.getElementById("admin-code-cancel");
+const adminCodeVerify = document.getElementById("admin-code-verify");
+
+// Admin elements
+const adminAppEl = document.getElementById("admin-app");
+const adminMenu = document.getElementById("admin-menu");
+const adminDisplayEl = document.getElementById("admin-display");
+const adminDropdown = document.getElementById("admin-dropdown");
+const btnAdminSignOut = document.getElementById("btn-admin-sign-out");
+const totalUsersCount = document.getElementById("total-users-count");
+const totalCoachesCount = document.getElementById("total-coaches-count");
+const totalBookingsCount = document.getElementById("total-bookings-count");
+const inactiveUsersCount = document.getElementById("inactive-users-count");
+const usersLast7Days = document.getElementById("users-last-7-days");
+const coachesLast7Days = document.getElementById("coaches-last-7-days");
+const bookingsLast7Days = document.getElementById("bookings-last-7-days");
+const refreshAdminStats = document.getElementById("refresh-admin-stats");
+const sendEngagementEmails = document.getElementById("send-engagement-emails");
+const recentActivityList = document.getElementById("recent-activity-list");
+const activityFilter = document.getElementById("activity-filter");
+const userSearch = document.getElementById("user-search");
+const searchUsersBtn = document.getElementById("search-users-btn");
+const usersList = document.getElementById("users-list");
+const refreshCoachesList = document.getElementById("refresh-coaches-list");
+const coachFilter = document.getElementById("coach-filter");
+const coachesList = document.getElementById("coaches-list");
+const coachApprovalStatus = document.getElementById("coach-approval-status");
 
 // Auth gate elements - Account type selection
 const accountTypeSelection = document.getElementById("account-type-selection");
@@ -130,13 +129,8 @@ const signupPassword = document.getElementById("signup-password");
 const signupPasswordConfirm = document.getElementById("signup-password-confirm");
 const signupError = document.getElementById("signup-error");
 
-// Legacy button references (for backward compatibility if needed)
-const btnUserLogin = btnSelectUser;
-const btnCoachLogin = btnSelectCoach;
-
 // Restore userType from localStorage on page load
-let userType = localStorage.getItem('userType') || null; // 'user' or 'coach'
-console.log('🚀 Script loaded. userType from localStorage:', userType);
+let userType = localStorage.getItem('userType') || null; // 'user', 'coach', or 'admin'
 
 const heightEl = document.getElementById("height");
 const weightEl = document.getElementById("weight");
@@ -259,11 +253,11 @@ function openBookingModal(coach, goal) {
     bookingDatetimeError.classList.add("hidden");
     bookingDatetimeContainer.classList.add("hidden");
     isBookingNow = true;
-    
+
     // Reset button styles
     bookingNowBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
     bookingLaterBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
-    
+
     bookingModal.classList.remove("hidden");
 }
 
@@ -282,10 +276,10 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
         jitsiApi = null;
         jitsiContainer.innerHTML = '';
     }
-    
+
     currentCallBookingId = bookingId;
     videoCallTitle.textContent = title;
-    
+
     // Apply split-screen layout for coaches only
     const isCoach = userType === 'coach';
     if (isCoach) {
@@ -297,11 +291,11 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
         videoCallModal.style.height = '';
         videoCallModal.style.top = '';
         videoCallModal.style.bottom = '';
-        
+
         // Show user profile panel for coaches
         userProfilePanel.classList.remove('hidden');
         userWorkoutPanel.classList.add('hidden');
-        
+
         // Load user data for the session
         loadUserProfileForSession(bookingId);
     } else {
@@ -313,28 +307,28 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
         videoCallModal.style.height = '';
         videoCallModal.style.top = '';
         videoCallModal.style.bottom = '';
-        
+
         // Show workout panel for users, hide profile panel
         console.log('👤 User view - showing workout panel');
         userProfilePanel.classList.add('hidden');
         userWorkoutPanel.classList.remove('hidden');
         console.log('User workout panel hidden class:', userWorkoutPanel.classList.contains('hidden'));
-        
+
         // Load user's own workout data
         loadUserWorkoutForSession(bookingId);
     }
-    
+
     videoCallModal.classList.remove("hidden");
-    
+
     // Hide past sessions during active call for cleaner interface
     const coachPastSections = document.getElementById('coach-past-sessions-section');
     const userPastSections = document.getElementById('user-past-sessions-section');
     if (coachPastSections) coachPastSections.classList.add('hidden');
     if (userPastSections) userPastSections.classList.add('hidden');
-    
+
     callStarted = false; // Reset flag
     participantCount = 0; // Reset participant count
-    
+
     // Initialize Jitsi Meet with proper config
     const domain = 'meet.jit.si';
     const options = {
@@ -398,9 +392,9 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
             displayName: title.replace('Session with ', '')
         }
     };
-    
+
     console.log('Starting Jitsi call with room:', roomName, 'Role:', isModerator ? 'Coach (first to join will be moderator)' : 'User');
-    
+
     // Check if Jitsi API is available
     if (typeof window.JitsiMeetExternalAPI === 'undefined') {
         console.error('Jitsi Meet External API not loaded');
@@ -408,26 +402,26 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
         closeVideoCall();
         return;
     }
-    
+
     jitsiApi = new window.JitsiMeetExternalAPI(domain, options);
-    
+
     // Track when the conference actually starts (user joins successfully)
     jitsiApi.addEventListener('videoConferenceJoined', () => {
         console.log('User successfully joined video conference');
         callStarted = true;
     });
-    
+
     // Track participant count to avoid ending call prematurely
     jitsiApi.addEventListener('participantJoined', () => {
         participantCount++;
         console.log('Participant joined, total:', participantCount);
     });
-    
+
     jitsiApi.addEventListener('participantLeft', () => {
         participantCount--;
         console.log('Participant left, remaining:', participantCount);
     });
-    
+
     // Listen for when user leaves the call - but only if call has started
     jitsiApi.addEventListener('videoConferenceLeft', async () => {
         console.log('videoConferenceLeft event fired, callStarted:', callStarted);
@@ -441,7 +435,7 @@ function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false)
             }, 500);
         }
     });
-    
+
     // Listen for when conference ends
     jitsiApi.addEventListener('readyToClose', async () => {
         console.log('Video conference ready to close');
@@ -456,11 +450,11 @@ async function handleVideoCallEnd() {
         try {
             // Don't auto-save workout session - let coach add notes manually
             // The coach can use the "Save Session Summary" button to save with notes
-            
+
             // Automatically mark session as completed
             await endSession(currentCallBookingId);
             console.log('Session automatically ended:', currentCallBookingId);
-            
+
             // Remind coach to save notes if they haven't
             if (userType === 'coach' && workoutChecklist.length > 0) {
                 const hasNotes = sessionNotesTextarea?.value.trim();
@@ -480,14 +474,14 @@ function closeVideoCall() {
         jitsiApi.dispose();
         jitsiApi = null;
     }
-    
+
     // Cleanup workout progress listener
     if (workoutProgressListener) {
         workoutProgressListener();
         workoutProgressListener = null;
         console.log('🔌 Workout progress listener disconnected');
     }
-    
+
     videoCallModal.classList.add("hidden");
     userProfilePanel.classList.add("hidden");
     userWorkoutPanel.classList.add("hidden");
@@ -535,22 +529,22 @@ completeReviewBtn?.addEventListener("click", async () => {
 
 saveNotesBtn?.addEventListener("click", async () => {
     if (!currentReviewBooking) return;
-    
+
     const notes = coachSessionNotes.value.trim();
     if (!notes) {
         alert('Please enter some notes before saving.');
         return;
     }
-    
+
     try {
         saveNotesBtn.disabled = true;
         saveNotesBtn.innerHTML = 'Saving...';
-        
+
         await updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
             coachNotes: notes,
             notesUpdatedAt: serverTimestamp()
         });
-        
+
         saveNotesBtn.innerHTML = '✓ Saved';
         setTimeout(() => {
             saveNotesBtn.innerHTML = 'Save Notes';
@@ -568,7 +562,7 @@ saveNotesBtn?.addEventListener("click", async () => {
 document.getElementById('past-sessions-toggle')?.addEventListener('click', () => {
     const content = document.getElementById('past-sessions-content');
     const arrow = document.getElementById('past-sessions-arrow');
-    
+
     if (content.classList.contains('hidden')) {
         content.classList.remove('hidden');
         arrow.classList.add('rotate-180');
@@ -582,7 +576,7 @@ document.getElementById('past-sessions-toggle')?.addEventListener('click', () =>
 function hidePastSessionsDuringCall() {
     const coachPastSections = document.getElementById('coach-past-sessions-section');
     const userPastSections = document.getElementById('user-past-sessions-section');
-    
+
     if (coachPastSections) {
         coachPastSections.classList.add('hidden');
     }
@@ -595,7 +589,7 @@ function hidePastSessionsDuringCall() {
 function showPastSessionsWhenNotInCall() {
     const coachPastSections = document.getElementById('coach-past-sessions-section');
     const userPastSections = document.getElementById('user-past-sessions-section');
-    
+
     if (coachPastSections) {
         coachPastSections.classList.remove('hidden');
     }
@@ -610,38 +604,38 @@ async function loadUserProfileForSession(bookingId) {
         // Get booking details
         const bookingRef = doc(db, "bookings", bookingId);
         const bookingSnap = await getDoc(bookingRef);
-        
+
         if (!bookingSnap.exists()) {
             console.error('Booking not found');
             return;
         }
-        
+
         const booking = bookingSnap.data();
         currentSessionUserId = booking.userId;
-        
+
         // Load user profile
         const userRef = doc(db, "users", booking.userId);
         const userSnap = await getDoc(userRef);
-        
+
         if (userSnap.exists()) {
             const userData = userSnap.data();
-            
+
             // Populate profile summary
             const profileNameEl = document.getElementById('profile-name');
             const userName = userData.name || booking.userName || 'User';
             profileNameEl.textContent = userName;
-            
+
             // Setup hover tooltip for past sessions
             setupUserNameTooltip(profileNameEl, booking.userId, currentCoachId);
-            
+
             document.getElementById('profile-goal').textContent = userData.goal || booking.goal || '-';
             document.getElementById('profile-height').textContent = userData.heightCm ? `${userData.heightCm} cm` : '-';
             document.getElementById('profile-weight').textContent = userData.weightKg ? `${userData.weightKg} kg` : '-';
             document.getElementById('profile-requirements').textContent = userData.requirements || 'No specific requirements';
-            
+
             // Load past workout sessions
             await loadPastWorkouts(booking.userId);
-            
+
             // Generate AI workout plan
             await generateWorkoutPlan(userData);
         }
@@ -654,27 +648,27 @@ async function loadUserProfileForSession(bookingId) {
 function setupUserNameTooltip(nameElement, userId, coachId) {
     const tooltip = document.getElementById('profile-name-tooltip');
     const tooltipContent = document.getElementById('tooltip-summaries-content');
-    
+
     if (!tooltip || !tooltipContent) return;
-    
+
     let isHovering = false;
     let summariesLoaded = false;
     let loadTimeout = null;
-    
+
     // Show tooltip on hover
     nameElement.addEventListener('mouseenter', async () => {
         isHovering = true;
-        
+
         // Delay loading to avoid unnecessary queries on quick hovers
         loadTimeout = setTimeout(async () => {
             if (!isHovering) return;
-            
+
             tooltip.classList.remove('hidden');
-            
+
             // Load summaries only once
             if (!summariesLoaded) {
                 tooltipContent.innerHTML = '<p class="text-gray-400 italic text-xs">Loading...</p>';
-                
+
                 try {
                     const q = query(
                         collection(db, "workoutSessions"),
@@ -683,28 +677,27 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
                         orderBy("completedAt", "desc"),
                         limit(5)
                     );
-                    
+
                     const snapshot = await getDocs(q);
-                    
+
                     if (snapshot.empty) {
                         tooltipContent.innerHTML = '<p class="text-slate-600 italic text-xs">No past sessions with this user</p>';
                     } else {
                         tooltipContent.innerHTML = '';
-                        
+
                         snapshot.docs.forEach(doc => {
                             const session = doc.data();
                             const date = session.completedAt?.toDate?.() || new Date();
                             const completionRate = Math.round((session.completedItems / session.totalItems) * 100);
-                            
+
                             const miniCard = document.createElement('div');
                             miniCard.className = 'bg-gray-900/70 rounded p-2 border border-gray-700/50 mb-2';
                             miniCard.innerHTML = `
                                 <div class="flex justify-between items-start mb-1">
                                     <span class="text-white font-medium text-xs">${date.toLocaleDateString()}</span>
-                                    <span class="text-xs ${
-                                        completionRate >= 80 ? 'text-green-400' : 
-                                        completionRate >= 50 ? 'text-yellow-400' : 'text-red-400'
-                                    }">${completionRate}%</span>
+                                    <span class="text-xs ${completionRate >= 80 ? 'text-green-400' :
+                                    completionRate >= 50 ? 'text-yellow-400' : 'text-red-400'
+                                }">${completionRate}%</span>
                                 </div>
                                 <p class="text-gray-400 text-xs mb-1">${session.goal || 'General Fitness'}</p>
                                 ${session.coachNotes ? `
@@ -715,7 +708,7 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
                             `;
                             tooltipContent.appendChild(miniCard);
                         });
-                        
+
                         summariesLoaded = true;
                     }
                 } catch (error) {
@@ -725,12 +718,12 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
             }
         }, 300); // 300ms delay before showing
     });
-    
+
     // Hide tooltip on mouse leave
     nameElement.addEventListener('mouseleave', () => {
         isHovering = false;
         clearTimeout(loadTimeout);
-        
+
         // Small delay before hiding to allow moving to tooltip
         setTimeout(() => {
             if (!isHovering) {
@@ -738,12 +731,12 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
             }
         }, 200);
     });
-    
+
     // Keep tooltip visible when hovering over it
     tooltip.addEventListener('mouseenter', () => {
         isHovering = true;
     });
-    
+
     tooltip.addEventListener('mouseleave', () => {
         isHovering = false;
         tooltip.classList.add('hidden');
@@ -754,15 +747,15 @@ function setupUserNameTooltip(nameElement, userId, coachId) {
 async function loadPastWorkouts(userId) {
     console.log('📚 Loading past workouts for user:', userId);
     const pastWorkoutsList = document.getElementById('past-workouts-list');
-    
+
     if (!pastWorkoutsList) {
         console.error('❌ Past workouts list element not found');
         return;
     }
-    
+
     try {
         pastWorkoutsList.innerHTML = '<p class="text-gray-400 italic text-xs">Loading...</p>';
-        
+
         // First try to get from workoutSessions collection
         console.log('🔍 Querying workoutSessions collection...');
         let q = query(
@@ -771,10 +764,10 @@ async function loadPastWorkouts(userId) {
             orderBy("completedAt", "desc"),
             limit(5)
         );
-        
+
         let snapshot = await getDocs(q);
         console.log('Workout sessions found:', snapshot.size);
-        
+
         // If no workout sessions, fall back to completed bookings
         if (snapshot.empty) {
             console.log('⚠️ No workout sessions, trying completed bookings...');
@@ -786,7 +779,7 @@ async function loadPastWorkouts(userId) {
                     orderBy("createdAt", "desc"),
                     limit(5)
                 );
-                
+
                 snapshot = await getDocs(q);
                 console.log('Completed bookings found:', snapshot.size);
             } catch (bookingError) {
@@ -802,21 +795,21 @@ async function loadPastWorkouts(userId) {
                 console.log('Completed bookings (no order) found:', snapshot.size);
             }
         }
-        
+
         if (snapshot.empty) {
             console.log('ℹ️ No past sessions found');
             pastWorkoutsList.innerHTML = '<p class="text-slate-600 italic text-xs">No past sessions</p>';
             return;
         }
-        
+
         pastWorkoutsList.innerHTML = '';
         const sessions = [];
         snapshot.forEach(doc => {
             sessions.push({ id: doc.id, ...doc.data() });
         });
-        
+
         console.log('✅ Rendering', sessions.length, 'detailed past sessions');
-        
+
         // Display detailed summary cards with coach notes
         sessions.forEach(session => {
             // Only show if it has exercise data (from workoutSessions collection)
@@ -840,13 +833,13 @@ async function loadPastWorkouts(userId) {
                 pastWorkoutsList.appendChild(div);
             }
         });
-        
+
         console.log('✅ Past sessions rendered successfully');
     } catch (error) {
         console.error('❌ Error loading past workouts:', error);
         console.error('Error details:', error.message);
         console.error('Error code:', error.code);
-        
+
         if (pastWorkoutsList) {
             if (error.code === 'failed-precondition' || error.message?.includes('index')) {
                 pastWorkoutsList.innerHTML = '<p class="text-yellow-400 italic text-xs">Database index required. Check console.</p>';
@@ -861,19 +854,19 @@ async function loadPastWorkouts(userId) {
 // Generate AI workout plan and display as checklist
 async function generateWorkoutPlan(userData) {
     const checklistContainer = document.getElementById('workout-checklist');
-    
+
     try {
         checklistContainer.innerHTML = '<p class="text-gray-400 italic text-xs">Generating workout plan...</p>';
-        
+
         // Generate AI workout plan based on user profile
         let plan = [];
-        
+
         try {
             plan = await aiService.generateWorkoutPlan(userData);
         } catch (aiError) {
             console.warn('AI generation failed, using default plan:', aiError);
         }
-        
+
         // Use default plan if AI fails or returns empty
         if (!plan || plan.length === 0) {
             const goal = userData.goal || 'general fitness';
@@ -887,24 +880,24 @@ async function generateWorkoutPlan(userData) {
                 'Cool-down: 5 minutes stretching and deep breathing'
             ];
         }
-        
+
         workoutChecklist = plan.map((item, index) => ({
             id: index,
             exercise: item,
             completed: false
         }));
-        
+
         renderWorkoutChecklist();
     } catch (error) {
         console.error('Error generating workout plan:', error);
-        
+
         // Fallback to basic default plan
         workoutChecklist = [
             { id: 0, exercise: 'Warm-up: 5 minutes cardio', completed: false },
             { id: 1, exercise: 'Main exercise (customize based on goal)', completed: false },
             { id: 2, exercise: 'Cool-down: 5 minutes stretching', completed: false }
         ];
-        
+
         renderWorkoutChecklist();
     }
 }
@@ -912,22 +905,22 @@ async function generateWorkoutPlan(userData) {
 // Render workout checklist
 function renderWorkoutChecklist() {
     const checklistContainer = document.getElementById('workout-checklist');
-    
+
     if (!checklistContainer) {
         console.error('Workout checklist container not found');
         return;
     }
-    
+
     checklistContainer.innerHTML = '';
-    
+
     if (!workoutChecklist || workoutChecklist.length === 0) {
         checklistContainer.innerHTML = '<p class="text-gray-600 italic text-xs">No workout plan available</p>';
         return;
     }
-    
+
     const div = document.createElement('div');
     div.className = 'space-y-2';
-    
+
     workoutChecklist.forEach(item => {
         const label = document.createElement('label');
         label.className = 'flex items-start gap-2 text-xs cursor-pointer hover:bg-gray-100 p-2 rounded transition-colors';
@@ -937,7 +930,7 @@ function renderWorkoutChecklist() {
         `;
         div.appendChild(label);
     });
-    
+
     checklistContainer.appendChild(div);
     attachCheckboxListeners();
 }
@@ -951,7 +944,7 @@ function attachCheckboxListeners() {
             if (item) {
                 item.completed = e.target.checked;
                 renderWorkoutChecklist();
-                
+
                 // Update in Firestore in real-time for syncing with user view
                 if (currentCallBookingId) {
                     await updateWorkoutProgress(currentCallBookingId, workoutChecklist);
@@ -983,20 +976,20 @@ async function updateWorkoutProgress(bookingId, checklist) {
 async function loadUserWorkoutForSession(bookingId) {
     console.log('🏋️ Loading user workout for session:', bookingId);
     console.log('Current user ID:', currentUserId);
-    
+
     try {
         const bookingRef = doc(db, "bookings", bookingId);
         const bookingSnap = await getDoc(bookingRef);
-        
+
         if (!bookingSnap.exists()) {
             console.error('❌ Booking not found:', bookingId);
             return;
         }
-        
+
         const booking = bookingSnap.data();
         console.log('✅ Booking data:', booking);
         currentSessionUserId = currentUserId; // User viewing their own data
-        
+
         // Display goal
         const goalElement = document.getElementById('user-session-goal');
         console.log('Goal element found:', !!goalElement);
@@ -1004,13 +997,13 @@ async function loadUserWorkoutForSession(bookingId) {
             goalElement.textContent = booking.goal || 'General Fitness';
             console.log('✅ Goal set to:', goalElement.textContent);
         }
-        
+
         // Generate workout plan for user
         const userRef = doc(db, "users", currentUserId);
         const userSnap = await getDoc(userRef);
         const userProfile = userSnap.exists() ? userSnap.data() : { goal: booking.goal };
         console.log('User profile:', userProfile);
-        
+
         // Generate AI workout plan
         console.log('🤖 Generating AI workout plan...');
         let plan = [];
@@ -1020,7 +1013,7 @@ async function loadUserWorkoutForSession(bookingId) {
         } catch (aiError) {
             console.warn('⚠️ AI generation failed for user, using default plan:', aiError);
         }
-        
+
         // Use default plan if AI fails or returns empty
         if (!plan || plan.length === 0) {
             console.log('Using default workout plan');
@@ -1036,27 +1029,27 @@ async function loadUserWorkoutForSession(bookingId) {
             ];
             console.log('Default plan:', plan);
         }
-        
+
         // Map to consistent structure with exercise property
         workoutChecklist = plan.map((exercise, index) => ({
             id: index,
             exercise: exercise,
             completed: false
         }));
-        
+
         console.log('📋 Workout checklist created:', workoutChecklist);
         console.log('Calling renderUserWorkoutChecklist...');
         renderUserWorkoutChecklist();
-        
+
         // Load past workout summaries with this coach
         if (booking.coachId) {
             console.log('📊 Loading past workout summaries with coach:', booking.coachId);
             await fetchUserWorkoutSummaries(currentUserId, booking.coachId);
         }
-        
+
         // Setup real-time listener for coach updates
         setupWorkoutProgressListener(bookingId);
-        
+
     } catch (error) {
         console.error('❌ Error loading user workout:', error);
         console.error('Stack trace:', error.stack);
@@ -1067,13 +1060,13 @@ async function loadUserWorkoutForSession(bookingId) {
 let workoutProgressListener = null;
 function setupWorkoutProgressListener(bookingId) {
     console.log('🔄 Setting up real-time workout progress listener for booking:', bookingId);
-    
+
     const sessionRef = doc(db, "activeWorkoutSessions", bookingId);
     workoutProgressListener = onSnapshot(sessionRef, (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
             console.log('📡 Real-time update received:', data);
-            
+
             if (data.checklist) {
                 workoutChecklist = data.checklist;
                 renderUserWorkoutChecklist();
@@ -1090,40 +1083,40 @@ function renderUserWorkoutChecklist() {
     console.log('📝 Rendering user workout checklist (read-only)...');
     const container = document.getElementById('user-workout-checklist');
     console.log('Container element:', container);
-    
+
     if (!container) {
         console.error('❌ User workout checklist container not found!');
         return;
     }
-    
+
     console.log('Workout checklist length:', workoutChecklist.length);
     console.log('Workout checklist data:', workoutChecklist);
-    
+
     if (workoutChecklist.length === 0) {
         console.log('⚠️ Empty checklist, showing placeholder');
         container.innerHTML = '<p class="text-gray-400 italic text-xs">Waiting for coach to start session...</p>';
         updateUserProgress();
         return;
     }
-    
+
     const html = workoutChecklist.map((item, index) => `
         <div class="flex items-start gap-2 text-sm transition-colors py-2 border-b border-gray-700/30 last:border-0">
             <div class="mt-0.5 flex-shrink-0">
-                ${item.completed 
-                    ? '<svg class="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>'
-                    : '<svg class="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" fill="none"></circle></svg>'
-                }
+                ${item.completed
+            ? '<svg class="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>'
+            : '<svg class="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" fill="none"></circle></svg>'
+        }
             </div>
             <span class="${item.completed ? 'line-through text-gray-500' : 'text-gray-300'} flex-1">
                 ${item.exercise}
             </span>
         </div>
     `).join('');
-    
+
     console.log('Generated HTML length:', html.length);
     container.innerHTML = html;
     console.log('✅ HTML injected into container');
-    
+
     updateUserProgress();
 }
 
@@ -1132,24 +1125,24 @@ function updateUserProgress() {
     const completedCount = workoutChecklist.filter(item => item.completed).length;
     const totalCount = workoutChecklist.length;
     const percentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
-    
+
     console.log('📊 Progress update:', completedCount, '/', totalCount, '=', percentage.toFixed(1) + '%');
-    
+
     const progressText = document.getElementById('user-progress-text');
     const progressBar = document.getElementById('user-progress-bar');
-    
+
     console.log('Progress text element:', !!progressText, 'Progress bar element:', !!progressBar);
-    
+
     if (progressText) {
         progressText.textContent = `${completedCount} / ${totalCount}`;
         console.log('✅ Progress text updated:', progressText.textContent);
     }
-    
+
     if (progressBar) {
         progressBar.style.width = `${percentage}%`;
         console.log('✅ Progress bar width updated:', progressBar.style.width);
     }
-    
+
     // Cheer the user on progress! 🎉
     showProgressCheer(completedCount, totalCount, percentage);
 }
@@ -1162,9 +1155,9 @@ function showProgressCheer(completedCount, totalCount, percentage) {
         lastCheerCount = completedCount;
         return;
     }
-    
+
     lastCheerCount = completedCount;
-    
+
     const cheerMessages = [
         "💪 Great job! Keep going!",
         "🔥 You're on fire!",
@@ -1177,7 +1170,7 @@ function showProgressCheer(completedCount, totalCount, percentage) {
         "💥 Boom! One more down!",
         "🌟 You're amazing!"
     ];
-    
+
     // Special messages for milestones
     let message = '';
     if (percentage === 100) {
@@ -1191,13 +1184,13 @@ function showProgressCheer(completedCount, totalCount, percentage) {
     } else {
         message = cheerMessages[Math.floor(Math.random() * cheerMessages.length)];
     }
-    
+
     // Create floating cheer notification
     const cheer = document.createElement('div');
     cheer.className = 'fixed top-20 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-emerald-500 to-blue-500 text-white px-6 py-3 rounded-full shadow-2xl font-bold text-lg z-50 animate-bounce';
     cheer.style.animation = 'slideInDown 0.5s ease-out, fadeOut 0.5s ease-in 2.5s';
     cheer.textContent = message;
-    
+
     // Add custom animations
     const style = document.createElement('style');
     style.textContent = `
@@ -1210,19 +1203,19 @@ function showProgressCheer(completedCount, totalCount, percentage) {
             to { opacity: 0; }
         }
     `;
-    
+
     if (!document.querySelector('#cheer-animations')) {
         style.id = 'cheer-animations';
         document.head.appendChild(style);
     }
-    
+
     document.body.appendChild(cheer);
-    
+
     // Remove after 3 seconds
     setTimeout(() => {
         cheer.remove();
     }, 3000);
-    
+
     // Add confetti effect on completion
     if (percentage === 100) {
         createConfetti();
@@ -1233,7 +1226,7 @@ function showProgressCheer(completedCount, totalCount, percentage) {
 function createConfetti() {
     const colors = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'];
     const confettiCount = 50;
-    
+
     for (let i = 0; i < confettiCount; i++) {
         const confetti = document.createElement('div');
         confetti.style.position = 'fixed';
@@ -1246,13 +1239,13 @@ function createConfetti() {
         confetti.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
         confetti.style.zIndex = '9999';
         confetti.style.pointerEvents = 'none';
-        
+
         document.body.appendChild(confetti);
-        
+
         const duration = 2000 + Math.random() * 1000;
         const rotation = Math.random() * 360;
         const drift = (Math.random() - 0.5) * 200;
-        
+
         confetti.animate([
             { transform: 'translateY(0) rotate(0deg) translateX(0)', opacity: 0.8 },
             { transform: `translateY(100vh) rotate(${rotation}deg) translateX(${drift}px)`, opacity: 0 }
@@ -1260,7 +1253,7 @@ function createConfetti() {
             duration: duration,
             easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
         });
-        
+
         setTimeout(() => confetti.remove(), duration);
     }
 }
@@ -1268,16 +1261,16 @@ function createConfetti() {
 async function saveWorkoutSession(bookingId, userId, checklist, coachNotes = '') {
     try {
         const completedItems = checklist.filter(item => item.completed);
-        
+
         if (completedItems.length === 0) {
             console.log('No items completed, skipping save');
             return null;
         }
-        
+
         const bookingRef = doc(db, "bookings", bookingId);
         const bookingSnap = await getDoc(bookingRef);
         const booking = bookingSnap.data();
-        
+
         const sessionData = {
             userId: userId,
             bookingId: bookingId,
@@ -1294,7 +1287,7 @@ async function saveWorkoutSession(bookingId, userId, checklist, coachNotes = '')
             completedAt: serverTimestamp(),
             createdAt: serverTimestamp()
         };
-        
+
         const docRef = await addDoc(collection(db, "workoutSessions"), sessionData);
         console.log('Workout session saved successfully with ID:', docRef.id);
         return docRef.id;
@@ -1307,30 +1300,30 @@ async function saveWorkoutSession(bookingId, userId, checklist, coachNotes = '')
 // Save session notes separately (can be called independently)
 async function saveSessionNotes(bookingId, userId, checklist) {
     const notes = sessionNotesTextarea?.value.trim() || '';
-    
+
     if (!notes && checklist.filter(item => item.completed).length === 0) {
         alert('Please add session notes or complete at least one exercise before saving.');
         return;
     }
-    
+
     if (!saveSessionNotesBtn) return;
-    
+
     saveSessionNotesBtn.disabled = true;
     notesStatus.textContent = 'Saving...';
     notesStatus.classList.remove('hidden', 'text-red-400', 'text-green-400');
     notesStatus.classList.add('text-yellow-400');
-    
+
     try {
         const sessionId = await saveWorkoutSession(bookingId, userId, checklist, notes);
-        
+
         if (sessionId) {
             notesStatus.textContent = '✅ Session summary saved successfully!';
             notesStatus.classList.remove('text-yellow-400');
             notesStatus.classList.add('text-green-400');
-            
+
             // Clear the notes
             if (sessionNotesTextarea) sessionNotesTextarea.value = '';
-            
+
             setTimeout(() => {
                 notesStatus.classList.add('hidden');
             }, 3000);
@@ -1354,10 +1347,10 @@ async function saveSessionNotes(bookingId, userId, checklist) {
 function createSummaryCard(summary) {
     const card = document.createElement('div');
     card.className = 'bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700/50 hover:border-blue-300 dark:hover:border-blue-600/50 transition-colors';
-    
+
     const date = summary.completedAt?.toDate?.() || new Date();
     const completionRate = Math.round((summary.completedItems / summary.totalItems) * 100);
-    
+
     card.innerHTML = `
             <div class="flex items-start justify-between mb-2">
                 <div class="flex-1">
@@ -1414,7 +1407,7 @@ function createSummaryCard(summary) {
                 </ul>
             </details>
     `;
-    
+
     return card;
 }
 
@@ -1423,10 +1416,10 @@ async function fetchUserWorkoutSummaries(userId, coachId) {
     if (!userId || !coachId || !userPastSummariesList) {
         return;
     }
-    
+
     try {
         console.log('📊 Fetching workout summaries for user:', userId, 'with coach:', coachId);
-        
+
         const q = query(
             collection(db, "workoutSessions"),
             where("userId", "==", userId),
@@ -1434,26 +1427,26 @@ async function fetchUserWorkoutSummaries(userId, coachId) {
             orderBy("completedAt", "desc"),
             limit(10)
         );
-        
+
         const snapshot = await getDocs(q);
-        
+
         if (snapshot.empty) {
             userPastSummariesList.innerHTML = '';
             userSummariesEmpty.classList.remove('hidden');
             return;
         }
-        
+
         userSummariesEmpty.classList.add('hidden');
         userPastSummariesList.innerHTML = '';
-        
+
         snapshot.docs.forEach(doc => {
             const summary = { id: doc.id, ...doc.data() };
             const card = createSummaryCard(summary);
             userPastSummariesList.appendChild(card);
         });
-        
+
         console.log('✅ Loaded', snapshot.size, 'past sessions for user');
-        
+
     } catch (error) {
         console.error('❌ Error fetching user workout summaries:', error);
         userPastSummariesList.innerHTML = '<p class="text-red-400 text-sm">Error loading past sessions. Check console.</p>';
@@ -1462,113 +1455,87 @@ async function fetchUserWorkoutSummaries(userId, coachId) {
 
 function toggleAuthUI(user) {
     const isSignedIn = !!user;
-    console.log('🎨 toggleAuthUI called. isSignedIn:', isSignedIn, 'userType:', userType);
-    console.log('🎨 Elements check:', {
-        landingHero: !!landingHero,
-        gateEl: !!gateEl,
-        appEl: !!appEl,
-        coachAppEl: !!coachAppEl
-    });
-    
+
     if (!isSignedIn) {
-        console.log('🎨 Showing auth gate and landing page');
-        // Show landing page and auth gate, hide apps
-        if (landingHero) {
-            landingHero.classList.remove("hidden");
-            console.log('🎨 Landing page shown');
-        } else {
-            console.error('🔴 landingHero element not found!');
-        }
         gateEl.classList.remove("hidden");
         appEl.classList.add("hidden");
         coachAppEl.classList.add("hidden");
+        adminAppEl.classList.add("hidden");
         btnSignIn.classList.remove("hidden");
         btnSignOut.classList.add("hidden");
         userMenu.classList.add("hidden");
         coachMenu.classList.add("hidden");
+        adminMenu.classList.add("hidden");
         userDisplayName.textContent = "";
         coachDisplayName.textContent = "";
     } else {
-        console.log('🎨 User signed in, hiding landing/auth, showing app');
-        // Hide landing page and auth gate when signed in
-        if (landingHero) {
-            landingHero.classList.add("hidden");
-            console.log('🎨 Landing page HIDDEN');
-        } else {
-            console.error('🔴 landingHero element not found!');
-        }
         gateEl.classList.add("hidden");
         btnSignIn.classList.add("hidden");
         btnSignOut.classList.remove("hidden");
-        
+
         // Show appropriate view based on user type
-        if (userType === 'coach') {
-            console.log('🎨 Showing COACH app');
+        if (userType === 'admin') {
+            appEl.classList.add("hidden");
+            coachAppEl.classList.add("hidden");
+            adminAppEl.classList.remove("hidden");
+            userMenu.classList.add("hidden");
+            coachMenu.classList.add("hidden");
+            adminMenu.classList.remove("hidden");
+            const adminDisplayName = adminMenu.querySelector('#admin-display span');
+            if (adminDisplayName) {
+                adminDisplayName.textContent = `${user.displayName ?? user.email}`;
+            }
+        } else if (userType === 'coach') {
             appEl.classList.add("hidden");
             coachAppEl.classList.remove("hidden");
+            adminAppEl.classList.add("hidden");
             userMenu.classList.add("hidden");
             coachMenu.classList.remove("hidden");
+            adminMenu.classList.add("hidden");
             coachDisplayName.textContent = `${user.displayName ?? user.email}`;
-            console.log('🎨 Coach app should now be visible');
         } else {
-            console.log('🎨 Showing USER app');
             appEl.classList.remove("hidden");
             coachAppEl.classList.add("hidden");
+            adminAppEl.classList.add("hidden");
             userMenu.classList.remove("hidden");
             coachMenu.classList.add("hidden");
+            adminMenu.classList.add("hidden");
             userDisplayName.textContent = `${user.displayName ?? user.email}`;
-            console.log('🎨 User app should now be visible');
         }
-        
-        // Scroll to top to show the app
-        window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 }
 
 async function loadUserProfile(userId) {
-    if (!userId) {
-        console.error('🔴 loadUserProfile called with undefined userId');
-        return;
+    const userRef = doc(db, "users", userId);
+    const snap = await getDoc(userRef);
+
+    if (snap.exists()) {
+        const data = snap.data();
+        heightEl.value = data.heightCm ?? "";
+        weightEl.value = data.weightKg ?? "";
+        goalEl.value = data.goal ?? "";
+        requirementsEl.value = data.requirements ?? "";
+
+        // Check if profile is complete
+        isProfileComplete = !!(data.heightCm && data.weightKg && data.goal);
+    } else {
+        // New user - no profile data yet, clear form fields
+        heightEl.value = "";
+        weightEl.value = "";
+        goalEl.value = "";
+        requirementsEl.value = "";
+        isProfileComplete = false;
     }
-    
-    console.log('👤 Loading user profile for:', userId);
-    
-    try {
-        const userRef = doc(db, "users", userId);
-        const snap = await getDoc(userRef);
-        
-        if (snap.exists()) {
-            const data = snap.data();
-            if (heightEl) heightEl.value = data.heightCm ?? "";
-            if (weightEl) weightEl.value = data.weightKg ?? "";
-            if (goalEl) goalEl.value = data.goal ?? "";
-            if (requirementsEl) requirementsEl.value = data.requirements ?? "";
-            
-            // Check if profile is complete
-            isProfileComplete = !!(data.heightCm && data.weightKg && data.goal);
-            console.log('👤 Profile loaded. Complete:', isProfileComplete);
-        } else {
-            // New user - no profile data yet, clear form fields
-            if (heightEl) heightEl.value = "";
-            if (weightEl) weightEl.value = "";
-            if (goalEl) goalEl.value = "";
-            if (requirementsEl) requirementsEl.value = "";
-            isProfileComplete = false;
-            console.log('👤 New user - no profile yet');
-        }
-        
-        // Update UI based on profile completion status
-        if (isProfileComplete) {
-            // Hide profile section and show main content
-            if (profileSection) profileSection.classList.add("hidden");
-            if (mainContent) mainContent.classList.remove("hidden");
-        } else {
-            // Show profile section for first-time or incomplete users
-            if (profileSection) profileSection.classList.remove("hidden");
-            if (mainContent) mainContent.classList.add("hidden");
-        }
-    } catch (error) {
-        console.error('🔴 Error loading user profile:', error);
+
+    // Update UI based on profile completion status
+    if (isProfileComplete) {
+        // Hide profile section and show main content
+        profileSection.classList.add("hidden");
+        mainContent.classList.remove("hidden");
+    } else {
+        // Show profile section for first-time or incomplete users
+        profileSection.classList.remove("hidden");
+        mainContent.classList.add("hidden");
     }
 }
 
@@ -1580,38 +1547,41 @@ async function loadCoachProfile(userEmail) {
         limit(1)
     );
     const snap = await getDocs(q);
-    
+
     const hasProfile = !snap.empty;
-    
+
     if (hasProfile) {
         // Existing coach - load data and show dashboard
         const coachDoc = snap.docs[0];
         const coachData = coachDoc.data();
         currentCoachId = coachDoc.id;
-        
+
         // Populate form fields for editing
         coachNameEl.value = coachData.name || "";
         coachBioEl.value = coachData.bio || "";
         coachExperienceEl.value = coachData.yearsExperience || "";
         coachRateEl.value = coachData.hourlyRate || "";
-        
+
         // Check specializations
         document.querySelectorAll('input[name="specialization"]').forEach(checkbox => {
             checkbox.checked = coachData.specializations?.includes(checkbox.value) || false;
         });
-        
+
         // Set coach display name in dropdown
         if (coachDisplayName) {
             coachDisplayName.textContent = coachData.name || userEmail;
         }
-        
+
+        // Display approval status
+        displayCoachApprovalStatus(coachData.approved);
+
         // Show dashboard, hide setup
         coachProfileSetup.classList.add("hidden");
         coachDashboard.classList.remove("hidden");
-        
+
         // Listen for real-time notifications
         listenForNotifications(userEmail);
-        
+
         return coachDoc.id;
     } else {
         // First time coach - show profile setup
@@ -1620,7 +1590,7 @@ async function loadCoachProfile(userEmail) {
         coachExperienceEl.value = "";
         coachRateEl.value = "";
         document.querySelectorAll('input[name="specialization"]').forEach(cb => cb.checked = false);
-        
+
         coachProfileSetup.classList.remove("hidden");
         coachDashboard.classList.add("hidden");
         return null;
@@ -1629,12 +1599,12 @@ async function loadCoachProfile(userEmail) {
 
 function listenForNotifications(coachEmail) {
     console.log('Setting up notification listener for:', coachEmail);
-    
+
     // Clean up previous listener
     if (notificationsListener) {
         notificationsListener();
     }
-    
+
     // Listen for new notifications
     const q = query(
         collection(db, "notifications"),
@@ -1642,7 +1612,7 @@ function listenForNotifications(coachEmail) {
         where("read", "==", false),
         orderBy("timestamp", "desc")
     );
-    
+
     notificationsListener = onSnapshot(q, (snapshot) => {
         console.log('Notification snapshot received, changes:', snapshot.docChanges().length);
         snapshot.docChanges().forEach((change) => {
@@ -1663,7 +1633,7 @@ function showNotificationToast(notification) {
     console.log('Showing notification toast for:', notification);
     if (notification.type === 'session_started') {
         const message = `🔔 ${notification.userName} started a session for ${notification.goal}!`;
-        
+
         // Create toast notification
         const toast = document.createElement('div');
         toast.className = 'fixed top-4 right-4 bg-green-600 text-white px-6 py-4 rounded-lg shadow-lg z-50 animate-slide-in';
@@ -1675,25 +1645,25 @@ function showNotificationToast(notification) {
                 <span class="font-medium">${message}</span>
             </div>
         `;
-        
+
         document.body.appendChild(toast);
-        
+
         // Play notification sound (optional)
         try {
             const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZSBAKQ5fZ8POMPAoXYbjr66dWFApBm+Lyv24gBSyEzvPahTYHImzB8N6UQQsUXLPo7KlYFAlDneHzwXAfBSqCzvLaikAHHGu/8OGYSRAKQpXY8fGNOwsWYLbq7KlZFAlAmN/yvnAfBCuBzfLaizsGH2vA8N+VRAsUXLPp7KpZFAlAmt/ywHEfBCx/zPLaiz0GHmu/8OCWSBEKQpPX8fCMPgsWX7bq7KpZFAlAmt/ywHEfBCx/zPLaiz0GH2q+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2q+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2q+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFAlAmt/ywHEfBCx/zPLajD0GH2m+8OCWSBEJQZLY8fCNPQsWXrbq7KlZFA==');
             audio.volume = 0.3;
-            audio.play().catch(() => {});
+            audio.play().catch(() => { });
         } catch (e) {
             // Ignore audio errors
         }
-        
+
         // Auto-dismiss after 5 seconds
         setTimeout(() => {
             toast.style.opacity = '0';
             toast.style.transition = 'opacity 0.3s';
             setTimeout(() => toast.remove(), 300);
         }, 5000);
-        
+
         // Bookings will auto-refresh via real-time listener
         console.log('Toast notification displayed, real-time listener will update bookings automatically');
     }
@@ -1702,12 +1672,12 @@ function showNotificationToast(notification) {
 async function saveCoachProfile(user) {
     const specializations = Array.from(document.querySelectorAll('input[name="specialization"]:checked'))
         .map(cb => cb.value);
-    
+
     if (specializations.length === 0) {
         alert('Please select at least one specialization');
         return;
     }
-    
+
     const coachData = {
         name: coachNameEl.value.trim(),
         email: user.email,
@@ -1721,7 +1691,7 @@ async function saveCoachProfile(user) {
         lastSeen: serverTimestamp(), // Initial last seen timestamp
         updatedAt: serverTimestamp()
     };
-    
+
     // Check if coach profile already exists
     const q = query(
         collection(db, "coaches"),
@@ -1729,7 +1699,7 @@ async function saveCoachProfile(user) {
         limit(1)
     );
     const snap = await getDocs(q);
-    
+
     if (!snap.empty) {
         // Update existing profile
         const coachDoc = snap.docs[0];
@@ -1738,10 +1708,11 @@ async function saveCoachProfile(user) {
     } else {
         // Create new profile
         coachData.createdAt = serverTimestamp();
+        coachData.approved = false; // Requires admin approval
         const newDocRef = await addDoc(collection(db, "coaches"), coachData);
         currentCoachId = newDocRef.id;
     }
-    
+
     // Start presence tracking for the newly created or updated coach profile
     startPresenceTracking();
 }
@@ -1808,7 +1779,7 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
         return;
     }
     coachEmpty.classList.add("hidden");
-    
+
     // Create a map of AI recommendations by coach ID
     const aiScores = new Map();
     if (aiRecommendations) {
@@ -1816,20 +1787,20 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
             aiScores.set(rec.coachId, rec);
         });
     }
-    
+
     for (const c of items) {
         const card = document.createElement("div");
         const aiRec = aiScores.get(c.id);
         const hasAI = !!aiRec;
-        
+
         card.className = `rounded-lg border p-4 flex flex-col gap-2 ${hasAI ? 'border-indigo-300 dark:border-indigo-700' : ''}`;
         card.setAttribute('data-coach-id', c.id); // Add data attribute for presence updates
         const btnId = `book-${c.id}`;
-        
+
         // Check if coach is online
         const onlineStatus = isCoachOnline(c);
         let presenceClass, presenceTitle;
-        
+
         if (onlineStatus === null) {
             // No presence data available
             presenceClass = 'bg-yellow-400';
@@ -1843,7 +1814,7 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
             presenceClass = 'bg-gray-400';
             presenceTitle = getLastSeenText(c.lastSeen);
         }
-        
+
         let aiSection = '';
         if (hasAI) {
             aiSection = `
@@ -1859,7 +1830,7 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
                 </div>
             `;
         }
-        
+
         card.innerHTML = `
       <div class="flex items-start justify-between">
         <div class="flex flex-col gap-1">
@@ -1908,38 +1879,38 @@ async function fetchCoachesForGoal(goal) {
             limit(12)
         );
     }
-    
+
     const snap = await getDocs(q);
     let items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    
+
     // Remove duplicate coaches by email (keep the most recent one)
     const uniqueCoaches = new Map();
     items.forEach(coach => {
         const email = coach.email;
-        if (!uniqueCoaches.has(email) || 
-            (coach.updatedAt && (!uniqueCoaches.get(email).updatedAt || 
-             coach.updatedAt.toMillis() > uniqueCoaches.get(email).updatedAt.toMillis()))) {
+        if (!uniqueCoaches.has(email) ||
+            (coach.updatedAt && (!uniqueCoaches.get(email).updatedAt ||
+                coach.updatedAt.toMillis() > uniqueCoaches.get(email).updatedAt.toMillis()))) {
             uniqueCoaches.set(email, coach);
         }
     });
     items = Array.from(uniqueCoaches.values());
-    
+
     // Sort by online status first, then by rating
     items.sort((a, b) => {
         const aOnline = isCoachOnline(a) ? 1 : 0;
         const bOnline = isCoachOnline(b) ? 1 : 0;
-        
+
         if (aOnline !== bOnline) {
             return bOnline - aOnline; // Online coaches first
         }
-        
+
         return (b.rating || 0) - (a.rating || 0); // Then by rating
     });
-    
+
     // Get AI recommendations if user profile exists (but don't fail if AI errors)
     const user = auth.currentUser;
     let aiRecommendations = null;
-    
+
     if (user && items.length > 0 && goal) {
         try {
             const userRef = doc(db, "users", user.uid);
@@ -1947,18 +1918,18 @@ async function fetchCoachesForGoal(goal) {
             if (userSnap.exists()) {
                 const userProfile = userSnap.data();
                 aiRecommendations = await aiService.generateCoachRecommendations(userProfile, items);
-                
+
                 // Sort coaches by AI match score if available, but keep online status priority
                 if (aiRecommendations && aiRecommendations.length > 0) {
                     const scoreMap = new Map(aiRecommendations.map(r => [r.coachId, r.matchScore]));
                     items.sort((a, b) => {
                         const aOnline = isCoachOnline(a) ? 1 : 0;
                         const bOnline = isCoachOnline(b) ? 1 : 0;
-                        
+
                         if (aOnline !== bOnline) {
                             return bOnline - aOnline; // Online coaches first
                         }
-                        
+
                         return (scoreMap.get(b.id) || 0) - (scoreMap.get(a.id) || 0); // Then by AI score
                     });
                 }
@@ -1968,7 +1939,7 @@ async function fetchCoachesForGoal(goal) {
             // Continue without AI recommendations - coaches will still display
         }
     }
-    
+
     renderCoaches(items, goal, aiRecommendations);
 }
 
@@ -1979,11 +1950,11 @@ function renderBookings(items) {
         return;
     }
     bookingEmpty.classList.add("hidden");
-    
+
     // Separate pending, active and past bookings
     const activeBookings = items.filter(b => b.status === 'pending' || b.status === 'confirmed' || b.status === 'reviewing' || b.status === 'active');
     const pastBookings = items.filter(b => b.status === 'completed' || b.status === 'cancelled');
-    
+
     // Render Active Bookings Section
     if (activeBookings.length > 0) {
         const activeSection = document.createElement("div");
@@ -1996,14 +1967,14 @@ function renderBookings(items) {
             <div id="active-bookings-list" class="space-y-3"></div>
         `;
         bookingList.appendChild(activeSection);
-        
+
         const activeList = activeSection.querySelector("#active-bookings-list");
         for (const b of activeBookings) {
             const row = createBookingCard(b, true);
             activeList.appendChild(row);
         }
     }
-    
+
     // Render Past Bookings Section (Collapsible)
     if (pastBookings.length > 0) {
         const pastSection = document.createElement("div");
@@ -2021,16 +1992,16 @@ function renderBookings(items) {
             <div id="past-bookings-list" class="space-y-3 hidden"></div>
         `;
         bookingList.appendChild(pastSection);
-        
+
         const pastList = pastSection.querySelector("#past-bookings-list");
         const toggleBtn = pastSection.querySelector("#toggle-past-bookings");
         const chevron = pastSection.querySelector("#past-bookings-chevron");
-        
+
         toggleBtn.addEventListener("click", () => {
             pastList.classList.toggle("hidden");
             chevron.classList.toggle("rotate-180");
         });
-        
+
         for (const b of pastBookings) {
             const row = createBookingCard(b, false);
             pastList.appendChild(row);
@@ -2049,7 +2020,7 @@ function createBookingCard(b, isActive) {
         cancelled: 'border-red-500/30 bg-red-500/5'
     };
     row.className = `rounded-lg border p-4 flex items-center justify-between gap-4 ${statusColors[b.status] || 'border-gray-700'}`;
-    
+
     const cancelBtnId = `cancel-${b.id}`;
     const endBtnId = `end-${b.id}`;
     const deleteBtnId = `delete-${b.id}`;
@@ -2063,19 +2034,19 @@ function createBookingCard(b, isActive) {
         completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-200 text-gray-700 border border-gray-300">✓ Completed</span>',
         cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-600 border border-red-500/30">✕ Cancelled</span>'
     };
-    
+
     // Check if scheduled time has arrived (allow joining 5 minutes early)
     const now = Date.now();
     const scheduledTime = b.scheduledAt?.toMillis?.() ?? now;
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
-    
+
     // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
     const showJoinButton = (b.status === 'confirmed' || b.status === 'active' || b.status === 'reviewing') && b.meetingLink && canJoinYet;
     const showCancelButton = isActive && b.status === "pending";
     // Show End button only if time has arrived (canJoinYet) and status is confirmed/reviewing/active
     const showEndButton = isActive && (b.status === "confirmed" || b.status === "reviewing" || b.status === "active") && canJoinYet;
     const showDeleteButton = !isActive && (b.status === "completed" || b.status === "cancelled");
-    
+
     row.innerHTML = `
       <div class="flex-1">
         <p class="font-medium text-gray-900">${b.coachName ?? b.coachId}</p>
@@ -2090,7 +2061,7 @@ function createBookingCard(b, isActive) {
         ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100">Delete</button>` : ""}
       </div>
     `;
-    
+
     if (showJoinButton) {
         const btn = row.querySelector(`#${joinBtnId}`);
         btn?.addEventListener("click", async () => {
@@ -2099,7 +2070,7 @@ function createBookingCard(b, isActive) {
             try {
                 // Only mark session as active if it's not already active
                 if (b.status !== 'active') {
-                    await updateDoc(doc(db, "bookings", b.id), { 
+                    await updateDoc(doc(db, "bookings", b.id), {
                         status: "active",
                         joinedAt: serverTimestamp()
                     });
@@ -2116,7 +2087,7 @@ function createBookingCard(b, isActive) {
             }
         });
     }
-    
+
     if (showCancelButton) {
         const btn = row.querySelector(`#${cancelBtnId}`);
         btn?.addEventListener("click", async () => {
@@ -2132,7 +2103,7 @@ function createBookingCard(b, isActive) {
             }
         });
     }
-    
+
     if (showEndButton) {
         const btn = row.querySelector(`#${endBtnId}`);
         btn?.addEventListener("click", async () => {
@@ -2150,7 +2121,7 @@ function createBookingCard(b, isActive) {
             }
         });
     }
-    
+
     if (showDeleteButton) {
         const btn = row.querySelector(`#${deleteBtnId}`);
         btn?.addEventListener("click", async () => {
@@ -2168,14 +2139,14 @@ function createBookingCard(b, isActive) {
             }
         });
     }
-    
+
     return row;
 }
 
 // Helper function to generate meeting room name
 function generateMeetingRoom() {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    const randomString = Array.from({length: 12}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const randomString = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     return `fitness-session-${randomString}`;
 }
 
@@ -2185,12 +2156,12 @@ async function fetchBookings() {
         renderBookings([]);
         return;
     }
-    
+
     // Clean up previous listener
     if (userBookingsListener) {
         userBookingsListener();
     }
-    
+
     // Set up real-time listener for user bookings
     const q = query(
         collection(db, "bookings"),
@@ -2198,11 +2169,11 @@ async function fetchBookings() {
         orderBy("createdAt", "desc"),
         limit(20)
     );
-    
+
     userBookingsListener = onSnapshot(q, (snapshot) => {
         const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         renderBookings(items);
-        
+
         // Check for newly confirmed bookings (sound notification for user)
         snapshot.docChanges().forEach(change => {
             if (change.type === 'modified') {
@@ -2334,8 +2305,8 @@ function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
 
     // Completion rate
     const totalBookings = bookings.length;
-    const completionRate = totalBookings > 0 
-        ? Math.round((completedBookings.length / totalBookings) * 100) 
+    const completionRate = totalBookings > 0
+        ? Math.round((completedBookings.length / totalBookings) * 100)
         : 0;
 
     // Weekly average (over last 4 weeks)
@@ -2352,13 +2323,13 @@ function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
         const targetMonth = new Date(currentYear, currentMonth - i, 1);
         const monthSessions = completedBookings.filter(b => {
             const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
-            return date.getMonth() === targetMonth.getMonth() && 
-                   date.getFullYear() === targetMonth.getFullYear();
+            return date.getMonth() === targetMonth.getMonth() &&
+                date.getFullYear() === targetMonth.getFullYear();
         });
         const monthAiWorkouts = aiWorkouts.filter(w => {
             const date = w.createdAt?.toDate?.() || new Date(0);
-            return date.getMonth() === targetMonth.getMonth() && 
-                   date.getFullYear() === targetMonth.getFullYear();
+            return date.getMonth() === targetMonth.getMonth() &&
+                date.getFullYear() === targetMonth.getFullYear();
         });
         monthlyTrend.push({
             month: targetMonth.toLocaleDateString('en-US', { month: 'short' }),
@@ -2375,7 +2346,7 @@ function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
         targetDate.setDate(now.getDate() - i);
         const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
         const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59);
-        
+
         // Count bookings for the day
         const dayBookings = completedBookings.filter(b => {
             const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
@@ -2386,7 +2357,7 @@ function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
             const date = w.createdAt?.toDate?.() || new Date(0);
             return date >= dayStart && date <= dayEnd;
         });
-        
+
         weeklyActivity.push({
             day: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
             date: targetDate.getDate(),
@@ -2424,8 +2395,8 @@ function calculateAnalytics(bookings, sessions, aiWorkouts, userProfile) {
     const uniqueCoachesCount = uniqueCoachIds.size;
 
     // Cancellation rate
-    const cancellationRate = bookings.length > 0 
-        ? Math.round((cancelledBookings.length / bookings.length) * 100) 
+    const cancellationRate = bookings.length > 0
+        ? Math.round((cancelledBookings.length / bookings.length) * 100)
         : 0;
 
     // Average session duration (from workout sessions)
@@ -2495,7 +2466,7 @@ function calculateGoalProgress(userProfile, bookings, sessions, aiWorkouts) {
 
     const goal = userProfile.goal;
     const totalActivities = bookings.length + aiWorkouts.length;
-    
+
     // Define milestones based on goal
     const milestones = {
         weight_loss: { target: 20, name: 'Weight Loss', color: 'pink', icon: '🔥' },
@@ -2537,7 +2508,7 @@ function calculateGoalProgress(userProfile, bookings, sessions, aiWorkouts) {
  */
 function generateActivitySummary(bookings, aiWorkouts, sessions) {
     const activities = [];
-    
+
     // Add recent bookings
     bookings.slice(0, 5).forEach(b => {
         const date = b.createdAt?.toDate?.() || new Date();
@@ -2574,14 +2545,14 @@ function generateActivitySummary(bookings, aiWorkouts, sessions) {
 function calculateStreak(bookings, aiWorkouts) {
     // Combine all activity dates
     const activityDates = new Set();
-    
+
     bookings.forEach(b => {
         const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.();
         if (date) {
             activityDates.add(date.toDateString());
         }
     });
-    
+
     aiWorkouts.forEach(w => {
         const date = w.createdAt?.toDate?.();
         if (date) {
@@ -2592,18 +2563,18 @@ function calculateStreak(bookings, aiWorkouts) {
     // Calculate streak
     let streak = 0;
     const today = new Date();
-    
+
     for (let i = 0; i < 365; i++) {
         const checkDate = new Date(today);
         checkDate.setDate(today.getDate() - i);
-        
+
         if (activityDates.has(checkDate.toDateString())) {
             streak++;
         } else if (i > 0) { // Allow today to be missed
             break;
         }
     }
-    
+
     return streak;
 }
 
@@ -2612,7 +2583,7 @@ function calculateStreak(bookings, aiWorkouts) {
  */
 function renderAnalytics(data) {
     if (analyticsLoading) analyticsLoading.classList.add('hidden');
-    
+
     // Check if there's any data to show
     if (data.totalBookings === 0 && data.totalAiWorkouts === 0) {
         showAnalyticsEmpty();
@@ -2681,12 +2652,12 @@ function renderMonthlyTrendChart(monthlyTrend) {
     if (!container) return;
 
     const maxValue = Math.max(...monthlyTrend.map(m => m.total), 1);
-    
+
     container.innerHTML = monthlyTrend.map(m => {
         const heightPercent = (m.total / maxValue) * 100;
         const sessionsHeight = m.total > 0 ? (m.sessions / m.total) * heightPercent : 0;
         const aiHeight = m.total > 0 ? (m.aiWorkouts / m.total) * heightPercent : 0;
-        
+
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-40 relative">
@@ -2711,11 +2682,11 @@ function renderWeeklyActivityChart(weeklyActivity) {
 
     const maxValue = Math.max(...weeklyActivity.map(d => d.total), 1);
     const today = new Date().toLocaleDateString('en-US', { weekday: 'short' });
-    
+
     container.innerHTML = weeklyActivity.map(d => {
         const heightPercent = (d.total / maxValue) * 100;
         const isToday = d.day === today;
-        
+
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-40 relative">
@@ -2744,14 +2715,14 @@ function renderTopCoaches(topCoaches) {
     }
 
     if (emptyEl) emptyEl.classList.add('hidden');
-    
+
     const maxCount = Math.max(...topCoaches.map(c => c.count), 1);
-    
+
     container.innerHTML = topCoaches.map((coach, index) => {
         const barWidth = (coach.count / maxCount) * 100;
         const medals = ['🥇', '🥈', '🥉'];
         const medal = index < 3 ? medals[index] : '';
-        
+
         return `
             <div class="flex items-center gap-3">
                 <span class="text-lg w-6">${medal || `${index + 1}.`}</span>
@@ -2783,9 +2754,9 @@ function renderGoalProgress(goalProgress) {
         purple: { bg: 'from-purple-600 to-violet-500', text: 'text-purple-400', ring: 'ring-purple-500/30' },
         gray: { bg: 'from-gray-600 to-gray-500', text: 'text-gray-400', ring: 'ring-gray-500/30' }
     };
-    
+
     const colors = colorClasses[goalProgress.color] || colorClasses.gray;
-    
+
     container.innerHTML = `
         <div class="space-y-4">
             <div class="flex items-center justify-between">
@@ -2864,12 +2835,11 @@ function renderActivitySummary(recentActivity, streak, totalAiWorkouts) {
                             <p class="text-sm text-gray-900 truncate">${a.title}</p>
                             <p class="text-xs text-gray-600">${a.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                         </div>
-                        <span class="text-xs px-2 py-1 rounded ${
-                            a.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
-                            a.status === 'cancelled' ? 'bg-red-500/20 text-red-400' :
-                            a.status === 'generated' ? 'bg-purple-500/20 text-purple-400' :
-                            'bg-blue-500/20 text-blue-400'
-                        }">${a.status}</span>
+                        <span class="text-xs px-2 py-1 rounded ${a.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
+            a.status === 'cancelled' ? 'bg-red-500/20 text-red-400' :
+                a.status === 'generated' ? 'bg-purple-500/20 text-purple-400' :
+                    'bg-blue-500/20 text-blue-400'
+        }">${a.status}</span>
                     </div>
                 `).join('')}
             </div>
@@ -2966,7 +2936,7 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
 
     // Filter by status
     const completedBookings = bookings.filter(b => b.status === 'completed');
-    
+
     // Get unique clients
     const clientMap = new Map();
     completedBookings.forEach(b => {
@@ -3047,8 +3017,8 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
         const targetMonth = new Date(currentYear, currentMonth - i, 1);
         const monthSessions = completedBookings.filter(b => {
             const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
-            return date.getMonth() === targetMonth.getMonth() && 
-                   date.getFullYear() === targetMonth.getFullYear();
+            return date.getMonth() === targetMonth.getMonth() &&
+                date.getFullYear() === targetMonth.getFullYear();
         });
         revenueTrend.push({
             month: targetMonth.toLocaleDateString('en-US', { month: 'short' }),
@@ -3064,12 +3034,12 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
         targetDate.setDate(now.getDate() - i);
         const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
         const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59);
-        
+
         const daySessions = completedBookings.filter(b => {
             const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
             return date >= dayStart && date <= dayEnd;
         });
-        
+
         weeklyActivity.push({
             day: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
             date: targetDate.getDate(),
@@ -3101,11 +3071,11 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
     // Performance metrics
     const totalSessions = completedBookings.length;
     const cancelledBookings = bookings.filter(b => b.status === 'cancelled').length;
-    const cancellationRate = bookings.length > 0 
-        ? Math.round((cancelledBookings / bookings.length) * 100) 
+    const cancellationRate = bookings.length > 0
+        ? Math.round((cancelledBookings / bookings.length) * 100)
         : 0;
-    const avgSessionsPerClient = uniqueClients.length > 0 
-        ? (totalSessions / uniqueClients.length).toFixed(1) 
+    const avgSessionsPerClient = uniqueClients.length > 0
+        ? (totalSessions / uniqueClients.length).toFixed(1)
         : 0;
 
     // Total lifetime revenue
@@ -3113,8 +3083,8 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
 
     // Client retention rate (clients with 2+ sessions / total clients)
     const returningClients = uniqueClients.filter(c => c.sessionsCount >= 2);
-    const retentionRate = uniqueClients.length > 0 
-        ? Math.round((returningClients.length / uniqueClients.length) * 100) 
+    const retentionRate = uniqueClients.length > 0
+        ? Math.round((returningClients.length / uniqueClients.length) * 100)
         : 0;
 
     // Peak booking hour
@@ -3136,18 +3106,18 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
     // Monthly growth rate (comparing last 3 months avg to previous 3 months avg)
     const threeMonthsAgo = new Date(currentYear, currentMonth - 3, 1);
     const sixMonthsAgo = new Date(currentYear, currentMonth - 6, 1);
-    
+
     const recentThreeMonths = completedBookings.filter(b => {
         const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
         return date >= threeMonthsAgo;
     }).length;
-    
+
     const previousThreeMonths = completedBookings.filter(b => {
         const date = b.scheduledAt?.toDate?.() || b.createdAt?.toDate?.() || new Date(0);
         return date >= sixMonthsAgo && date < threeMonthsAgo;
     }).length;
-    
-    const growthRate = previousThreeMonths > 0 
+
+    const growthRate = previousThreeMonths > 0
         ? Math.round(((recentThreeMonths - previousThreeMonths) / previousThreeMonths) * 100)
         : (recentThreeMonths > 0 ? 100 : 0);
 
@@ -3181,7 +3151,7 @@ function calculateCoachAnalytics(bookings, sessions, coachProfile) {
  */
 function renderCoachAnalytics(data) {
     if (coachAnalyticsLoading) coachAnalyticsLoading.classList.add('hidden');
-    
+
     if (data.totalSessions === 0) {
         showCoachAnalyticsEmpty();
         return;
@@ -3236,7 +3206,7 @@ function renderCoachAnalytics(data) {
     // Render charts
     renderCoachRevenueChart(data.revenueTrend);
     renderCoachWeeklyChart(data.weeklyActivity);
-    
+
     // Render lists
     renderCoachTopClients(data.topClients);
     renderCoachGoalsDistribution(data.goalsDistribution);
@@ -3252,17 +3222,17 @@ function renderCoachRevenueChart(revenueTrend) {
     if (!container) return;
 
     const maxRevenue = Math.max(...revenueTrend.map(m => m.revenue), 1);
-    
+
     container.innerHTML = revenueTrend.map((m, idx) => {
         const heightPercent = (m.revenue / maxRevenue) * 100;
         const isCurrentMonth = idx === revenueTrend.length - 1;
-        
+
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-32 relative">
                     <div class="w-full ${isCurrentMonth ? 'bg-gradient-to-t from-yellow-600 to-amber-400' : 'bg-gradient-to-t from-yellow-700/60 to-amber-500/60'} rounded-t transition-all duration-500" 
                          style="height: ${heightPercent}%"></div>
-                    ${m.revenue > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-yellow-300 font-medium whitespace-nowrap">₹${(m.revenue/1000).toFixed(1)}k</span>` : ''}
+                    ${m.revenue > 0 ? `<span class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-yellow-300 font-medium whitespace-nowrap">₹${(m.revenue / 1000).toFixed(1)}k</span>` : ''}
                 </div>
                 <span class="text-xs ${isCurrentMonth ? 'text-yellow-400 font-semibold' : 'text-gray-400'}">${m.month}</span>
             </div>
@@ -3279,11 +3249,11 @@ function renderCoachWeeklyChart(weeklyActivity) {
 
     const maxCount = Math.max(...weeklyActivity.map(d => d.count), 1);
     const today = new Date().toLocaleDateString('en-US', { weekday: 'short' });
-    
+
     container.innerHTML = weeklyActivity.map(d => {
         const heightPercent = (d.count / maxCount) * 100;
         const isToday = d.day === today;
-        
+
         return `
             <div class="flex-1 flex flex-col items-center gap-1">
                 <div class="w-full flex flex-col justify-end h-32 relative">
@@ -3313,15 +3283,15 @@ function renderCoachTopClients(topClients) {
 
     if (emptyEl) emptyEl.classList.add('hidden');
     const maxSessions = Math.max(...topClients.map(c => c.sessionsCount), 1);
-    
+
     container.innerHTML = topClients.map((client, idx) => {
         const barWidth = (client.sessionsCount / maxSessions) * 100;
         const medals = ['🥇', '🥈', '🥉'];
         const medal = idx < 3 ? medals[idx] : '';
-        const goalsList = Array.from(client.goals).slice(0, 2).map(g => 
+        const goalsList = Array.from(client.goals).slice(0, 2).map(g =>
             g.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())
         ).join(', ');
-        
+
         return `
             <div class="flex items-center gap-3">
                 <span class="text-lg w-6">${medal || `${idx + 1}.`}</span>
@@ -3357,7 +3327,7 @@ function renderCoachGoalsDistribution(goalsDistribution) {
     };
 
     const total = goalsDistribution.reduce((sum, g) => sum + g.count, 0);
-    
+
     if (total === 0) {
         container.innerHTML = '<p class="text-sm text-gray-400">No data yet</p>';
         return;
@@ -3366,7 +3336,7 @@ function renderCoachGoalsDistribution(goalsDistribution) {
     container.innerHTML = goalsDistribution.slice(0, 4).map(g => {
         const goalInfo = goalLabels[g.goal] || { label: g.goal.replace('_', ' '), color: 'gray', icon: '🎯' };
         const percentage = Math.round((g.count / total) * 100);
-        
+
         const colorClasses = {
             pink: 'from-pink-600 to-rose-500 text-pink-300',
             blue: 'from-blue-600 to-indigo-500 text-blue-300',
@@ -3377,7 +3347,7 @@ function renderCoachGoalsDistribution(goalsDistribution) {
             gray: 'from-gray-600 to-gray-500 text-gray-300'
         };
         const colors = colorClasses[goalInfo.color] || colorClasses.gray;
-        
+
         return `
             <div class="flex items-center gap-3">
                 <span class="text-lg">${goalInfo.icon}</span>
@@ -3445,10 +3415,10 @@ function renderClientsNeedingAttention(clients) {
 
     if (emptyEl) emptyEl.classList.add('hidden');
     const now = new Date();
-    
+
     container.innerHTML = clients.map(client => {
         const daysSinceLastSession = Math.floor((now - client.lastSession) / (1000 * 60 * 60 * 24));
-        
+
         return `
             <div class="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors">
                 <div class="flex items-center gap-3">
@@ -3476,14 +3446,14 @@ async function createBooking(coachId, goal, scheduledAt) {
     const user = auth.currentUser;
     if (!user) return;
     console.log('Creating booking for coachId:', coachId, 'goal:', goal);
-    
+
     const coachSnap = await getDoc(doc(db, "coaches", coachId)).catch(() => null);
     const coachData = coachSnap?.exists?.() ? coachSnap.data() : null;
     const coachName = coachData?.name ?? null;
     const coachEmail = coachData?.email ?? null;
-    
+
     console.log('Coach data:', { coachName, coachEmail });
-    
+
     // Generate Jitsi Meet room (free, no API required)
     console.log('Using Jitsi Meet for video sessions');
     const roomName = generateMeetingRoom();
@@ -3491,7 +3461,7 @@ async function createBooking(coachId, goal, scheduledAt) {
     // Use clean URL without hash parameters - configuration will be handled in the API
     const meetingLink = `https://meet.jit.si/${roomName}`;
     const meetingPassword = '';
-    
+
     const bookingData = {
         userId: user.uid,
         userEmail: user.email,
@@ -3507,11 +3477,11 @@ async function createBooking(coachId, goal, scheduledAt) {
         meetingPassword: meetingPassword,
         createdAt: serverTimestamp()
     };
-    
+
     console.log('Booking data:', bookingData);
     const bookingRef = await addDoc(collection(db, "bookings"), bookingData);
     console.log('Booking created with ID:', bookingRef.id);
-    
+
     // Notify the coach about new booking request
     if (coachEmail) {
         await notifyCoach(coachEmail, {
@@ -3524,19 +3494,19 @@ async function createBooking(coachId, goal, scheduledAt) {
             timestamp: serverTimestamp()
         });
     }
-    
+
     return bookingRef.id;
 }
 
 async function confirmBooking(bookingId, userEmail) {
     const bookingRef = doc(db, "bookings", bookingId);
-    await updateDoc(bookingRef, { 
+    await updateDoc(bookingRef, {
         status: "confirmed",
         confirmedAt: serverTimestamp()
     });
-    
+
     console.log('✅ Booking confirmed, will trigger notification to user via listener');
-    
+
     // Notify user that booking is confirmed
     if (userEmail) {
         await addDoc(collection(db, "notifications"), {
@@ -3571,18 +3541,18 @@ async function notifyCoach(coachEmail, notificationData) {
 async function fetchCoachBookings() {
     const user = auth.currentUser;
     console.log('fetchCoachBookings called, user:', user?.email, 'currentCoachId:', currentCoachId);
-    
+
     if (!user || !currentCoachId) {
         console.log('No user or coachId, rendering empty');
         renderCoachCalendar([]);
         return;
     }
-    
+
     // Clean up previous listener
     if (bookingsListener) {
         bookingsListener();
     }
-    
+
     // Set up real-time listener for bookings
     const q = query(
         collection(db, "bookings"),
@@ -3590,9 +3560,9 @@ async function fetchCoachBookings() {
         orderBy("createdAt", "desc"),
         limit(50)
     );
-    
+
     console.log('Setting up real-time bookings listener for coachId:', currentCoachId);
-    
+
     bookingsListener = onSnapshot(q, (snapshot) => {
         console.log('Bookings snapshot received, total docs:', snapshot.docs.length);
         const items = snapshot.docs.map(d => {
@@ -3601,7 +3571,7 @@ async function fetchCoachBookings() {
             return data;
         });
         renderCoachCalendar(items);
-        
+
         // Check for new pending bookings (sound notification for coach)
         snapshot.docChanges().forEach(change => {
             if (change.type === 'added') {
@@ -3627,9 +3597,9 @@ function renderCoachCalendar(bookings) {
         return;
     }
     coachBookingsEmpty.classList.add("hidden");
-    
+
     const now = Date.now();
-    
+
     // Categorize bookings
     const pendingBookings = bookings.filter(b => b.status === 'pending');
     const confirmedBookings = bookings.filter(b => b.status === 'confirmed');
@@ -3640,12 +3610,12 @@ function renderCoachCalendar(bookings) {
         }
         return false;
     });
-    const pastBookings = bookings.filter(b => 
-        b.status === 'completed' || 
+    const pastBookings = bookings.filter(b =>
+        b.status === 'completed' ||
         b.status === 'cancelled' ||
         (b.scheduledAt && b.scheduledAt.toMillis() < now && b.status === 'scheduled')
     );
-    
+
     // Render Pending Requests - PRIORITY SECTION
     if (pendingBookings.length > 0) {
         const pendingSection = document.createElement("div");
@@ -3664,13 +3634,13 @@ function renderCoachCalendar(bookings) {
             <div id="pending-sessions-list" class="space-y-3"></div>
         `;
         coachCalendar.appendChild(pendingSection);
-        
+
         const pendingList = pendingSection.querySelector("#pending-sessions-list");
         pendingBookings.forEach(booking => {
             pendingList.appendChild(createCoachBookingCard(booking, 'pending'));
         });
     }
-    
+
     // Render Confirmed & Active Sessions
     const activeAndConfirmed = [...confirmedBookings, ...activeBookings];
     if (activeAndConfirmed.length > 0) {
@@ -3684,13 +3654,13 @@ function renderCoachCalendar(bookings) {
             <div id="active-sessions-list" class="space-y-3"></div>
         `;
         coachCalendar.appendChild(activeSection);
-        
+
         const activeList = activeSection.querySelector("#active-sessions-list");
         activeAndConfirmed.forEach(booking => {
             activeList.appendChild(createCoachBookingCard(booking, 'active'));
         });
     }
-    
+
     // Render Upcoming Sessions
     if (upcomingBookings.length > 0) {
         const upcomingSection = document.createElement("div");
@@ -3703,21 +3673,21 @@ function renderCoachCalendar(bookings) {
             <div id="upcoming-sessions-list" class="space-y-3"></div>
         `;
         coachCalendar.appendChild(upcomingSection);
-        
+
         const upcomingList = upcomingSection.querySelector("#upcoming-sessions-list");
-        
+
         // Group upcoming by date
         const groupedUpcoming = {};
         upcomingBookings.forEach(booking => {
-            const date = new Date(booking.scheduledAt.toMillis()).toLocaleDateString('en-US', { 
-                weekday: 'short', 
-                month: 'short', 
-                day: 'numeric' 
+            const date = new Date(booking.scheduledAt.toMillis()).toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric'
             });
             if (!groupedUpcoming[date]) groupedUpcoming[date] = [];
             groupedUpcoming[date].push(booking);
         });
-        
+
         Object.keys(groupedUpcoming).forEach(date => {
             const dateGroup = document.createElement("div");
             dateGroup.className = "mb-3";
@@ -3732,7 +3702,7 @@ function renderCoachCalendar(bookings) {
             upcomingList.appendChild(dateGroup);
         });
     }
-    
+
     // Render Past Sessions (Collapsible)
     if (pastBookings.length > 0) {
         const pastSection = document.createElement("div");
@@ -3750,30 +3720,30 @@ function renderCoachCalendar(bookings) {
             <div id="past-sessions-list" class="space-y-3 hidden"></div>
         `;
         coachCalendar.appendChild(pastSection);
-        
+
         const pastList = pastSection.querySelector("#past-sessions-list");
         const toggleBtn = pastSection.querySelector("#toggle-past-sessions");
         const chevron = pastSection.querySelector("#past-sessions-chevron");
-        
+
         toggleBtn.addEventListener("click", () => {
             pastList.classList.toggle("hidden");
             chevron.classList.toggle("rotate-180");
         });
-        
+
         // Group past by date
         const groupedPast = {};
         pastBookings.forEach(booking => {
-            const date = booking.scheduledAt 
-                ? new Date(booking.scheduledAt.toMillis()).toLocaleDateString('en-US', { 
-                    weekday: 'short', 
-                    month: 'short', 
-                    day: 'numeric' 
+            const date = booking.scheduledAt
+                ? new Date(booking.scheduledAt.toMillis()).toLocaleDateString('en-US', {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric'
                 })
                 : 'Unknown';
             if (!groupedPast[date]) groupedPast[date] = [];
             groupedPast[date].push(booking);
         });
-        
+
         Object.keys(groupedPast).sort((a, b) => {
             const dateA = new Date(a);
             const dateB = new Date(b);
@@ -3796,7 +3766,7 @@ function renderCoachCalendar(bookings) {
 
 function createCoachBookingCard(booking, category) {
     const card = document.createElement("div");
-    
+
     const statusStyles = {
         pending: 'border-yellow-500/30 bg-yellow-500/5',
         confirmed: 'border-emerald-500/30 bg-emerald-500/5',
@@ -3805,18 +3775,18 @@ function createCoachBookingCard(booking, category) {
         completed: 'border-gray-300 bg-gray-50',
         cancelled: 'border-red-500/30 bg-red-500/5'
     };
-    
+
     card.className = `rounded-lg border p-4 ${statusStyles[booking.status] || 'border-gray-700'}`;
-    
-    const time = booking.scheduledAt 
-        ? new Date(booking.scheduledAt.toMillis()).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+
+    const time = booking.scheduledAt
+        ? new Date(booking.scheduledAt.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'In Progress';
-    
+
     const confirmBtnId = `confirm-${booking.id}`;
     const endBtnId = `coach-end-${booking.id}`;
     const deleteBtnId = `coach-delete-${booking.id}`;
     const joinBtnId = `coach-join-${booking.id}`;
-    
+
     const statusBadges = {
         pending: '<span class="inline-block px-2 py-1 rounded text-xs bg-yellow-500/20 text-yellow-600 border border-yellow-500/30">⏳ Pending</span>',
         confirmed: '<span class="inline-block px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-600 border border-emerald-500/30">✓ Confirmed</span>',
@@ -3825,19 +3795,19 @@ function createCoachBookingCard(booking, category) {
         completed: '<span class="inline-block px-2 py-1 rounded text-xs bg-gray-200 text-gray-700 border border-gray-300">✓ Completed</span>',
         cancelled: '<span class="inline-block px-2 py-1 rounded text-xs bg-red-500/20 text-red-600 border border-red-500/30">✕ Cancelled</span>'
     };
-    
+
     // Check if scheduled time has arrived (allow joining 5 minutes early)
     const now = Date.now();
     const scheduledTime = booking.scheduledAt?.toMillis?.() ?? now;
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
-    
+
     const showConfirmButton = booking.status === 'pending' && category !== 'past';
     // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
     const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active' || booking.status === 'reviewing') && booking.meetingLink && category !== 'past' && canJoinYet;
     // Show End button only if time has arrived (canJoinYet) and status is confirmed/reviewing/active
     const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'reviewing' || booking.status === 'active') && canJoinYet;
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
-    
+
     card.innerHTML = `
         <div class="flex items-center justify-between">
             <div class="flex-1">
@@ -3854,7 +3824,7 @@ function createCoachBookingCard(booking, category) {
             </div>
         </div>
     `;
-    
+
     // Add event listener for confirm button
     if (showConfirmButton) {
         setTimeout(() => {
@@ -3874,7 +3844,7 @@ function createCoachBookingCard(booking, category) {
             });
         }, 0);
     }
-    
+
     // Add event listener for join button (COACH)
     if (showJoinButton) {
         setTimeout(() => {
@@ -3884,18 +3854,18 @@ function createCoachBookingCard(booking, category) {
                 joinBtn.innerHTML = 'Starting Review...';
                 try {
                     // Update booking status to "reviewing" so user knows coach is preparing
-                    await updateDoc(doc(db, "bookings", booking.id), { 
+                    await updateDoc(doc(db, "bookings", booking.id), {
                         status: "reviewing",
                         reviewStartedAt: serverTimestamp()
                     });
-                    
+
                     // Show pre-session review modal for coach
                     showPreSessionReview(booking);
-                    
+
                     // Re-enable button (will be updated by real-time listener)
                     joinBtn.disabled = false;
                     joinBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session';
-                    
+
                 } catch (e) {
                     console.error('Failed to start review:', e);
                     alert('Failed to start review: ' + e.message);
@@ -3905,7 +3875,7 @@ function createCoachBookingCard(booking, category) {
             });
         }, 0);
     }
-    
+
     // Add event listener for end button
     if (showEndButton) {
         setTimeout(() => {
@@ -3926,7 +3896,7 @@ function createCoachBookingCard(booking, category) {
             });
         }, 0);
     }
-    
+
     // Add event listener for delete button
     if (showDeleteButton) {
         setTimeout(() => {
@@ -3947,7 +3917,7 @@ function createCoachBookingCard(booking, category) {
             });
         }, 0);
     }
-    
+
     return card;
 }
 
@@ -3961,7 +3931,7 @@ async function cancelBooking(bookingId) {
 async function deleteBooking(bookingId) {
     const user = auth.currentUser;
     if (!user) return;
-    
+
     // Delete the booking from Firestore (Jitsi rooms don't need cleanup)
     const bookingRef = doc(db, "bookings", bookingId);
     await deleteDoc(bookingRef);
@@ -3971,7 +3941,7 @@ async function endSession(bookingId) {
     const user = auth.currentUser;
     if (!user) return;
     const bookingRef = doc(db, "bookings", bookingId);
-    await updateDoc(bookingRef, { 
+    await updateDoc(bookingRef, {
         status: "completed",
         endedAt: serverTimestamp()
     });
@@ -3982,7 +3952,7 @@ bookingNowBtn.addEventListener("click", () => {
     isBookingNow = true;
     bookingDatetimeContainer.classList.add("hidden");
     bookingDatetimeError.classList.add("hidden");
-    
+
     // Update button styles
     bookingNowBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
     bookingLaterBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
@@ -3992,7 +3962,7 @@ bookingLaterBtn.addEventListener("click", () => {
     isBookingNow = false;
     bookingDatetimeContainer.classList.remove("hidden");
     bookingDatetimeError.classList.add("hidden");
-    
+
     // Update button styles
     bookingNowBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
     bookingLaterBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
@@ -4004,13 +3974,13 @@ bookingCancelBtn.addEventListener("click", () => {
 
 bookingConfirmBtn.addEventListener("click", async () => {
     console.log('Confirm clicked, pendingBookingCoach:', pendingBookingCoach, 'pendingBookingGoal:', pendingBookingGoal, 'isBookingNow:', isBookingNow);
-    
+
     if (!pendingBookingCoach || !pendingBookingGoal) {
         console.error('Missing coach or goal data');
         alert('Missing booking information. Please try again.');
         return;
     }
-    
+
     if (isBookingNow) {
         // Start session now
         bookingConfirmBtn.disabled = true;
@@ -4063,16 +4033,16 @@ bookingConfirmBtn.addEventListener("click", async () => {
 function showLoginOptions(type) {
     userType = type;
     localStorage.setItem('userType', type);
-    
+
     // Update UI indicator
     if (type === 'user') {
-        selectedTypeIcon.innerHTML = '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" stroke="#0ea5e9"/><circle cx="12" cy="7" r="4" stroke="#0ea5e9"/>';
+        selectedTypeIcon.textContent = '💪';
         selectedTypeText.textContent = 'Signing in as User';
     } else {
-        selectedTypeIcon.innerHTML = '<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#a855f7"/>';
+        selectedTypeIcon.textContent = '🏋️';
         selectedTypeText.textContent = 'Signing in as Coach';
     }
-    
+
     // Show login options, hide type selection
     accountTypeSelection.classList.add('hidden');
     loginOptions.classList.remove('hidden');
@@ -4141,40 +4111,10 @@ function showAuthError(element, message) {
     }
 }
 
-// Account type selection - Wait for DOM to be fully ready
-window.addEventListener('DOMContentLoaded', () => {
-    const btnSelectUser = document.getElementById("btn-select-user");
-    const btnSelectCoach = document.getElementById("btn-select-coach");
-    const btnAdminAccess = document.getElementById("btn-admin-access");
-    const btnChangeType = document.getElementById("btn-change-type");
-    
-    console.log('Setting up event listeners...', { btnSelectUser, btnSelectCoach, btnAdminAccess });
-    
-    if (btnSelectUser) {
-        btnSelectUser.addEventListener("click", () => {
-            console.log('User button clicked');
-            showLoginOptions('user');
-        });
-    }
-    
-    if (btnSelectCoach) {
-        btnSelectCoach.addEventListener("click", () => {
-            console.log('Coach button clicked');
-            showLoginOptions('coach');
-        });
-    }
-    
-    if (btnAdminAccess) {
-        btnAdminAccess.addEventListener("click", () => {
-            console.log('Admin button clicked');
-            alert('Admin functionality coming soon!');
-        });
-    }
-    
-    if (btnChangeType) {
-        btnChangeType.addEventListener("click", hideLoginOptions);
-    }
-});
+// Account type selection
+btnSelectUser?.addEventListener("click", () => showLoginOptions('user'));
+btnSelectCoach?.addEventListener("click", () => showLoginOptions('coach'));
+btnChangeType?.addEventListener("click", hideLoginOptions);
 
 // Auth method tabs
 tabGoogle?.addEventListener("click", showGooglePanel);
@@ -4184,545 +4124,32 @@ tabEmail?.addEventListener("click", showEmailPanel);
 btnShowLogin?.addEventListener("click", showLoginForm);
 btnShowSignup?.addEventListener("click", showSignupForm);
 
-// ============================================
-// ENHANCED DASHBOARD FUNCTIONALITY
-// ============================================
-
-// Enhanced User Dashboard Functions
-function updateUserWelcomeData() {
-    const user = auth.currentUser;
-    if (!user) return;
-    
-    const welcomeMessage = document.getElementById('user-welcome-message');
-    const lastActivity = document.getElementById('user-last-activity');
-    const currentGoal = document.getElementById('user-current-goal');
-    
-    // Update welcome message based on time of day
-    const hour = new Date().getHours();
-    let timeOfDay = 'day';
-    if (hour < 12) timeOfDay = 'morning';
-    else if (hour < 17) timeOfDay = 'afternoon';
-    else timeOfDay = 'evening';
-    
-    if (welcomeMessage) {
-        welcomeMessage.textContent = `Good ${timeOfDay}! Ready to crush your fitness goals?`;
-    }
-    
-    // Update last activity (mock data for now)
-    if (lastActivity) {
-        lastActivity.textContent = 'Last workout: 2 days ago';
-    }
-    
-    // Update current goal from profile data
-    if (currentGoal && userProfile?.goal) {
-        const goalMap = {
-            'weight_loss': 'Weight Loss',
-            'muscle_gain': 'Muscle Gain',
-            'endurance': 'Endurance',
-            'general_fitness': 'General Fitness'
-        };
-        currentGoal.textContent = goalMap[userProfile.goal] || 'Not Set';
-    }
-}
-
-function updateUserStats() {
-    // Update session count (mock data)
-    const sessionsCount = document.getElementById('user-sessions-count');
-    const weekSessions = document.getElementById('user-week-sessions');
-    const streak = document.getElementById('user-streak');
-    const progress = document.getElementById('user-progress');
-    
-    if (sessionsCount) sessionsCount.textContent = '12';
-    if (weekSessions) weekSessions.textContent = '3';
-    if (streak) streak.textContent = '5 days';
-    if (progress) progress.textContent = '68%';
-    
-    // Update progress bar
-    const progressBar = document.getElementById('goal-progress-bar');
-    const progressText = document.getElementById('goal-progress-text');
-    if (progressBar) {
-        progressBar.style.width = '68%';
-    }
-    if (progressText) {
-        progressText.textContent = '68% Complete';
-    }
-    
-    // Update weekly stats
-    const weekCalories = document.getElementById('week-calories');
-    const weekTime = document.getElementById('week-time');
-    const weekSessionsDetail = document.getElementById('week-sessions-detail');
-    
-    if (weekCalories) weekCalories.textContent = '1,245 kcal';
-    if (weekTime) weekTime.textContent = '180 min';
-    if (weekSessionsDetail) weekSessionsDetail.textContent = '3';
-    
-    // Update motivational quote
-    updateMotivationalQuote();
-}
-
-function updateMotivationalQuote() {
-    const quotes = [
-        "Your only limit is your mind.",
-        "Push yourself because no one else is going to do it for you.",
-        "Great things never come from comfort zones.",
-        "Don't stop when you're tired. Stop when you're done.",
-        "Success starts with self-discipline.",
-        "A year from now, you'll wish you had started today."
-    ];
-    
-    const quote = quotes[Math.floor(Math.random() * quotes.length)];
-    const quoteElement = document.getElementById('motivational-quote');
-    if (quoteElement) {
-        quoteElement.textContent = `"${quote}"`;
-    }
-}
-
-function updateRecentAchievements() {
-    const achievementsContainer = document.getElementById('recent-achievements');
-    if (!achievementsContainer) return;
-    
-    const achievements = [
-        { icon: '🏆', text: 'Completed 10 sessions', date: '2 days ago' },
-        { icon: '🔥', text: '5-day streak achieved', date: '1 week ago' },
-        { icon: '💪', text: 'First strength training', date: '2 weeks ago' }
-    ];
-    
-    achievementsContainer.innerHTML = achievements.map(achievement => 
-        `<div class="flex items-center gap-2 text-sm">
-            <span class="text-lg">${achievement.icon}</span>
-            <div>
-                <p class="font-medium text-gray-900">${achievement.text}</p>
-                <p class="text-xs text-gray-500">${achievement.date}</p>
-            </div>
-        </div>`
-    ).join('');
-}
-
-// Enhanced Coach Dashboard Functions
-function updateCoachWelcomeData() {
-    const user = auth.currentUser;
-    if (!user) return;
-    
-    const welcomeMessage = document.getElementById('coach-welcome-message');
-    const coachStatus = document.getElementById('coach-status');
-    const specialization = document.getElementById('coach-specialization');
-    const rating = document.getElementById('coach-rating');
-    
-    // Update welcome message
-    const hour = new Date().getHours();
-    let timeOfDay = 'day';
-    if (hour < 12) timeOfDay = 'morning';
-    else if (hour < 17) timeOfDay = 'afternoon';
-    else timeOfDay = 'evening';
-    
-    if (welcomeMessage) {
-        welcomeMessage.textContent = `Good ${timeOfDay}! Ready to inspire and transform lives?`;
-    }
-    
-    if (coachStatus) {
-        coachStatus.textContent = 'Online • Available for bookings';
-    }
-    
-    // Update specialization from profile
-    if (specialization && coachProfile?.specialty) {
-        specialization.textContent = coachProfile.specialty;
-    }
-    
-    if (rating) {
-        rating.textContent = '⭐ 4.8 rating (24 reviews)';
-    }
-}
-
-function updateCoachStats() {
-    // Update coach quick stats
-    const activeClients = document.getElementById('coach-active-clients-quick');
-    const todaySessions = document.getElementById('coach-today-sessions');
-    const monthlyRevenue = document.getElementById('coach-monthly-revenue');
-    const completionRate = document.getElementById('coach-completion-rate');
-    const nextSession = document.getElementById('coach-next-session');
-    
-    if (activeClients) activeClients.textContent = '18';
-    if (todaySessions) todaySessions.textContent = '4';
-    if (monthlyRevenue) monthlyRevenue.textContent = '$2,340';
-    if (completionRate) completionRate.textContent = '94%';
-    if (nextSession) nextSession.textContent = '2:30 PM';
-    
-    // Update schedule summary
-    const scheduleSummary = document.getElementById('coach-schedule-summary');
-    if (scheduleSummary) {
-        scheduleSummary.textContent = '4 sessions today, 2 available slots';
-    }
-}
-
-// Filter bookings by status
-function filterBookingsByStatus(status) {
-    const bookingList = document.getElementById('booking-list');
-    if (!bookingList) return;
-    
-    const bookings = bookingList.querySelectorAll('.booking-item');
-    bookings.forEach(booking => {
-        const bookingStatus = booking.getAttribute('data-status');
-        if (status === 'upcoming') {
-            booking.style.display = bookingStatus === 'upcoming' ? 'block' : 'none';
-        } else if (status === 'completed') {
-            booking.style.display = bookingStatus === 'completed' ? 'block' : 'none';
-        } else if (status === 'cancelled') {
-            booking.style.display = bookingStatus === 'cancelled' ? 'block' : 'none';
-        }
-    });
-}
-
-// Load coach schedule by view
-function loadCoachSchedule(view) {
-    const calendar = document.getElementById('coach-calendar');
-    if (!calendar) return;
-    
-    // Mock data based on view
-    let scheduleData = [];
-    
-    switch (view) {
-        case 'today':
-            scheduleData = [
-                { time: '9:00 AM', client: 'Sarah Johnson', type: 'Strength Training', status: 'confirmed' },
-                { time: '11:00 AM', client: 'Mike Chen', type: 'Cardio Session', status: 'confirmed' },
-                { time: '2:30 PM', client: 'Available Slot', type: '', status: 'available' },
-                { time: '4:00 PM', client: 'Lisa Rodriguez', type: 'Yoga Flow', status: 'confirmed' }
-            ];
-            break;
-        case 'week':
-            // Week view logic here
-            break;
-        case 'month':
-            // Month view logic here
-            break;
-        case 'availability':
-            // Availability view logic here
-            break;
-    }
-    
-    // Render schedule
-    calendar.innerHTML = scheduleData.map(item => 
-        `<div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg ${
-            item.status === 'available' ? 'bg-green-50 border-green-200' : 'bg-white'
-        }">
-            <div class="flex items-center space-x-3">
-                <div class="w-2 h-2 rounded-full ${
-                    item.status === 'confirmed' ? 'bg-blue-500' : 
-                    item.status === 'available' ? 'bg-green-500' : 'bg-gray-300'
-                }"></div>
-                <div>
-                    <p class="font-medium text-gray-900">${item.time}</p>
-                    <p class="text-sm text-gray-600">${item.client}</p>
-                    ${item.type ? `<p class="text-xs text-gray-500">${item.type}</p>` : ''}
-                </div>
-            </div>
-        </div>`
-    ).join('');
-}
-
-// Placeholder functions for new buttons
-function loadUserWorkouts() {
-    console.log('Loading user workouts...');
-    // Implementation for loading user workouts
-}
-
-function showProfileForm() {
-    const profileSection = document.getElementById('profile-section');
-    const mainContent = document.getElementById('main-content');
-    
-    if (profileSection && mainContent) {
-        profileSection.classList.remove('hidden');
-        mainContent.classList.add('hidden');
-    }
-}
-
-function loadCoachClients() {
-    console.log('Loading coach clients...');
-    // Implementation for loading coach clients
-}
-
-function showCoachProfileForm() {
-    const profileSection = document.getElementById('coach-profile-section');
-    
-    if (profileSection) {
-        profileSection.classList.remove('hidden');
-        profileSection.scrollIntoView({ behavior: 'smooth' });
-    }
-}
-
-function openAvailabilityModal() {
-    console.log('Opening availability modal...');
-    // Implementation for availability modal
-}
+btnAdminAccess.addEventListener("click", () => {
+    openAdminAccessModal();
+});
 
 // ============================================
-// TAB FUNCTIONALITY
+// GOOGLE SIGN-IN
 // ============================================
-
-function initializeTabs() {
-    const tabButtons = document.querySelectorAll('.tab-button');
-    const tabPanels = document.querySelectorAll('.tab-panel');
-    
-    tabButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            const targetTab = button.id.replace('tab-', 'content-');
-            
-            // Remove active class from all buttons
-            tabButtons.forEach(btn => {
-                btn.classList.remove('active', 'bg-blue-50', 'text-blue-600', 'border-blue-600');
-                btn.classList.add('text-gray-600');
-            });
-            
-            // Add active class to clicked button
-            button.classList.add('active', 'bg-blue-50', 'text-blue-600', 'border-blue-600');
-            button.classList.remove('text-gray-600');
-            
-            // Hide all tab panels
-            tabPanels.forEach(panel => {
-                panel.classList.add('hidden');
-                panel.classList.remove('active');
-            });
-            
-            // Show target tab panel
-            const targetPanel = document.getElementById(targetTab);
-            if (targetPanel) {
-                targetPanel.classList.remove('hidden');
-                targetPanel.classList.add('active');
-            }
-            
-            // Update quick action button functionality based on tab
-            updateQuickActions(targetTab);
-        });
-    });
-    
-    // Initialize with dashboard tab active
-    const dashboardTab = document.getElementById('tab-dashboard');
-    if (dashboardTab && !dashboardTab.classList.contains('active')) {
-        dashboardTab.click();
-    }
-}
-
-function updateQuickActions(activeTab) {
-    // Update quick action buttons based on active tab
-    const quickBookSession = document.getElementById('quick-book-session');
-    const quickViewWorkouts = document.getElementById('quick-view-workouts');
-    
-    if (quickBookSession) {
-        quickBookSession.addEventListener('click', () => {
-            // Switch to coaches tab
-            const coachesTab = document.getElementById('tab-coaches');
-            if (coachesTab) {
-                coachesTab.click();
-            }
-        });
-    }
-    
-    if (quickViewWorkouts) {
-        quickViewWorkouts.addEventListener('click', () => {
-            // Switch to workouts tab
-            const workoutsTab = document.getElementById('tab-workouts');
-            if (workoutsTab) {
-                workoutsTab.click();
-            }
-        });
-    }
-    
-    const quickEditProfile = document.getElementById('quick-edit-profile');
-    if (quickEditProfile) {
-        quickEditProfile.addEventListener('click', () => {
-            // Switch to profile tab
-            const profileTab = document.getElementById('tab-profile');
-            if (profileTab) {
-                profileTab.click();
-            }
-        });
-    }
-}
-
-// Enhanced Dashboard Event Listeners
-function initializeEnhancedDashboard() {
-    // Initialize tab functionality
-    initializeTabs();
-    
-    // Quick action buttons for users
-    const quickBookSession = document.getElementById('quick-book-session');
-    const quickViewWorkouts = document.getElementById('quick-view-workouts');
-    const quickEditProfile = document.getElementById('quick-edit-profile');
-    const bookNewSession = document.getElementById('book-new-session');
-    
-    // Session filter buttons
-    const filterUpcoming = document.getElementById('filter-upcoming');
-    const filterCompleted = document.getElementById('filter-completed');
-    const filterCancelled = document.getElementById('filter-cancelled');
-    
-    if (quickBookSession) {
-        quickBookSession.addEventListener('click', () => {
-            const coachList = document.getElementById('coach-list');
-            if (coachList) {
-                coachList.scrollIntoView({ behavior: 'smooth' });
-            }
-        });
-    }
-    
-    if (quickViewWorkouts) {
-        quickViewWorkouts.addEventListener('click', loadUserWorkouts);
-    }
-    
-    if (quickEditProfile) {
-        quickEditProfile.addEventListener('click', showProfileForm);
-    }
-    
-    if (bookNewSession) {
-        bookNewSession.addEventListener('click', () => {
-            const coachList = document.getElementById('coach-list');
-            if (coachList) {
-                coachList.scrollIntoView({ behavior: 'smooth' });
-            }
-        });
-    }
-    
-    // Session filter functionality
-    if (filterUpcoming && filterCompleted && filterCancelled) {
-        [filterUpcoming, filterCompleted, filterCancelled].forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                // Remove active class from all buttons
-                [filterUpcoming, filterCompleted, filterCancelled].forEach(b => {
-                    b.classList.remove('bg-blue-100', 'text-blue-700', 'border-blue-200');
-                    b.classList.add('text-gray-600', 'hover:bg-gray-100', 'border-gray-200');
-                });
-                
-                // Add active class to clicked button
-                e.target.classList.remove('text-gray-600', 'hover:bg-gray-100', 'border-gray-200');
-                e.target.classList.add('bg-blue-100', 'text-blue-700', 'border-blue-200');
-                
-                // Filter bookings based on selection
-                filterBookingsByStatus(e.target.id.replace('filter-', ''));
-            });
-        });
-    }
-    
-    // Coach dashboard event listeners
-    const coachQuickSchedule = document.getElementById('coach-quick-schedule');
-    const coachQuickClients = document.getElementById('coach-quick-clients');
-    const coachQuickAnalytics = document.getElementById('coach-quick-analytics');
-    const coachQuickProfile = document.getElementById('coach-quick-profile');
-    const coachAddAvailability = document.getElementById('coach-add-availability');
-    
-    // Schedule tab buttons
-    const scheduleToday = document.getElementById('schedule-today');
-    const scheduleWeek = document.getElementById('schedule-week');
-    const scheduleMonth = document.getElementById('schedule-month');
-    const scheduleAvailability = document.getElementById('schedule-availability');
-    
-    if (coachQuickSchedule) {
-        coachQuickSchedule.addEventListener('click', () => {
-            const scheduleSection = document.querySelector('#coach-calendar').parentElement;
-            if (scheduleSection) {
-                scheduleSection.scrollIntoView({ behavior: 'smooth' });
-            }
-        });
-    }
-    
-    if (coachQuickClients) {
-        coachQuickClients.addEventListener('click', loadCoachClients);
-    }
-    
-    if (coachQuickAnalytics) {
-        coachQuickAnalytics.addEventListener('click', () => {
-            const analyticsSection = document.getElementById('coach-analytics-content').parentElement;
-            if (analyticsSection) {
-                analyticsSection.scrollIntoView({ behavior: 'smooth' });
-                loadCoachAnalytics();
-            }
-        });
-    }
-    
-    if (coachQuickProfile) {
-        coachQuickProfile.addEventListener('click', showCoachProfileForm);
-    }
-    
-    if (coachAddAvailability) {
-        coachAddAvailability.addEventListener('click', openAvailabilityModal);
-    }
-    
-    // Schedule tab functionality
-    if (scheduleToday && scheduleWeek && scheduleMonth && scheduleAvailability) {
-        [scheduleToday, scheduleWeek, scheduleMonth, scheduleAvailability].forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                // Remove active class from all buttons
-                [scheduleToday, scheduleWeek, scheduleMonth, scheduleAvailability].forEach(b => {
-                    b.classList.remove('bg-blue-100', 'text-blue-700', 'border-blue-200');
-                    b.classList.add('text-gray-600', 'hover:bg-gray-100', 'border-gray-200');
-                });
-                
-                // Add active class to clicked button
-                e.target.classList.remove('text-gray-600', 'hover:bg-gray-100', 'border-gray-200');
-                e.target.classList.add('bg-blue-100', 'text-blue-700', 'border-blue-200');
-                
-                // Load schedule based on selection
-                const view = e.target.id.replace('schedule-', '');
-                loadCoachSchedule(view);
-            });
-        });
-    }
-    
-    // Initialize with default views
-    if (userType === 'user') {
-        updateUserWelcomeData();
-        updateUserStats();
-        updateRecentAchievements();
-    } else if (userType === 'coach') {
-        updateCoachWelcomeData();
-        updateCoachStats();
-        loadCoachSchedule('today');
-    }
-}
-
-// Call enhanced dashboard initialization when user profile loads
-if (typeof loadUserProfile === 'function') {
-    const originalLoadUserProfile = loadUserProfile;
-    loadUserProfile = async function(userId) {
-        await originalLoadUserProfile.call(this, userId);
-        initializeEnhancedDashboard();
-    };
-}
-
-// Initialize enhanced dashboard on page load
-setTimeout(() => {
-    initializeEnhancedDashboard();
-}, 1000);
 
 btnGoogleSignin?.addEventListener("click", signInWithGoogle);
 
 async function signInWithGoogle() {
-    console.log(`🔵 Google sign-in as "${userType}" clicked`);
-    console.log(`🔵 userType from localStorage:`, localStorage.getItem('userType'));
-    
-    if (!userType) {
-        alert('Please select User or Coach first');
-        return;
-    }
-    
+    console.log(`Google sign-in as ${userType} clicked`);
     const provider = new GoogleAuthProvider();
-    
-    // Try popup first, fall back to redirect if blocked
+
     try {
-        console.log('🔵 Attempting popup sign-in...');
+        console.log('Attempting popup sign-in...');
         const result = await signInWithPopup(auth, provider);
-        console.log('🔵 Popup sign-in successful:', result.user.email);
-        console.log('🔵 userType at sign-in completion:', userType);
+        console.log('Popup sign-in successful:', result.user);
     } catch (error) {
-        console.error('🔴 Popup sign-in error:', error.code, error.message);
-        
-        // If popup was blocked, use redirect
+        console.error('Popup sign-in error:', error.code, error.message);
+
+        // If popup was blocked or closed
         if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
-            console.log('🔴 Popup blocked, using redirect method...');
-            try {
-                await signInWithRedirect(auth, provider);
-            } catch (redirectError) {
-                console.error('🔴 Redirect error:', redirectError);
-                alert(`Sign-in failed: ${redirectError.message}`);
-            }
+            console.log('Popup blocked, trying redirect method...');
+            alert('Popup was blocked. Redirecting to Google sign-in page...');
+            await signInWithRedirect(auth, provider);
         } else {
             alert(`Sign-in failed: ${error.message}`);
         }
@@ -4730,23 +4157,14 @@ async function signInWithGoogle() {
 }
 
 // Handle redirect result on page load
-console.log('🔄 Checking for redirect result... userType from localStorage:', localStorage.getItem('userType'));
 getRedirectResult(auth)
     .then((result) => {
         if (result) {
-            console.log('✅ Signed in via redirect:', result.user.email);
-            console.log('✅ userType:', userType);
-            // Force UI update after redirect
-            setTimeout(() => {
-                console.log('🔄 Forcing UI update after redirect...');
-                toggleAuthUI(result.user);
-            }, 100);
-        } else {
-            console.log('ℹ️ No redirect result (normal page load)');
+            console.log('Signed in via redirect:', result.user);
         }
     })
     .catch((error) => {
-        console.error('🔴 Redirect sign-in error:', error);
+        console.error('Redirect sign-in error:', error);
         alert(`Redirect sign-in failed: ${error.message}`);
     });
 
@@ -4756,22 +4174,22 @@ getRedirectResult(auth)
 
 emailLoginForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    
+
     const email = loginEmail.value.trim();
     const password = loginPassword.value;
-    
+
     if (!email || !password) {
         showAuthError(loginError, 'Please enter both email and password');
         return;
     }
-    
+
     // Show loading state
     const submitBtn = emailLoginForm.querySelector('button[type="submit"]');
     const originalText = submitBtn.textContent;
     submitBtn.disabled = true;
     submitBtn.textContent = 'Signing in...';
     loginError.classList.add('hidden');
-    
+
     try {
         console.log(`Email sign-in as ${userType} with: ${email}`);
         const result = await signInWithEmailAndPassword(auth, email, password);
@@ -4779,7 +4197,7 @@ emailLoginForm?.addEventListener("submit", async (e) => {
         clearAuthForms();
     } catch (error) {
         console.error('Email sign-in error:', error.code, error.message);
-        
+
         let errorMessage = 'Sign-in failed. Please try again.';
         switch (error.code) {
             case 'auth/user-not-found':
@@ -4814,50 +4232,50 @@ emailLoginForm?.addEventListener("submit", async (e) => {
 
 emailSignupForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    
+
     const name = signupName.value.trim();
     const email = signupEmail.value.trim();
     const password = signupPassword.value;
     const confirmPassword = signupPasswordConfirm.value;
-    
+
     // Validation
     if (!name || !email || !password || !confirmPassword) {
         showAuthError(signupError, 'Please fill in all fields');
         return;
     }
-    
+
     if (password !== confirmPassword) {
         showAuthError(signupError, 'Passwords do not match');
         return;
     }
-    
+
     if (password.length < 6) {
         showAuthError(signupError, 'Password must be at least 6 characters');
         return;
     }
-    
+
     // Show loading state
     const submitBtn = emailSignupForm.querySelector('button[type="submit"]');
     const originalText = submitBtn.textContent;
     submitBtn.disabled = true;
     submitBtn.textContent = 'Creating account...';
     signupError.classList.add('hidden');
-    
+
     try {
         console.log(`Creating account as ${userType} for: ${email}`);
         const result = await createUserWithEmailAndPassword(auth, email, password);
-        
+
         // Update the user's display name
         await updateProfile(result.user, {
             displayName: name
         });
-        
+
         console.log('Account created successfully:', result.user);
         clearAuthForms();
-        
+
     } catch (error) {
         console.error('Sign-up error:', error.code, error.message);
-        
+
         let errorMessage = 'Account creation failed. Please try again.';
         switch (error.code) {
             case 'auth/email-already-in-use':
@@ -4910,12 +4328,12 @@ profileForm.addEventListener("submit", async (e) => {
     try {
         await saveUserProfile(user);
         profileStatus.textContent = "Saved.";
-        
+
         // Mark profile as complete and hide form
         isProfileComplete = true;
         profileSection.classList.add("hidden");
         mainContent.classList.remove("hidden");
-        
+
         // Load all coaches when profile is saved
         await Promise.all([
             fetchWorkoutsForGoal(goalEl.value),
@@ -4957,25 +4375,25 @@ const deleteProfileBtn = document.getElementById("delete-profile-btn");
 deleteProfileBtn?.addEventListener("click", async () => {
     const user = auth.currentUser;
     if (!user) return;
-    
+
     const confirmMessage = "⚠️ Are you sure you want to delete your profile?\n\nThis will permanently remove:\n• Your profile information\n• All your bookings\n• Your workout history\n\nThis action cannot be undone.";
-    
+
     if (!confirm(confirmMessage)) return;
-    
+
     // Final confirmation
     const finalConfirm = prompt("Type 'DELETE' to confirm profile deletion:");
     if (finalConfirm !== 'DELETE') {
         alert('Profile deletion cancelled.');
         return;
     }
-    
+
     deleteProfileBtn.disabled = true;
     deleteProfileBtn.textContent = 'Deleting...';
-    
+
     try {
         // Delete all user data
         const userRef = doc(db, "users", user.uid);
-        
+
         // Delete user bookings
         const bookingsQuery = query(
             collection(db, "bookings"),
@@ -4983,7 +4401,7 @@ deleteProfileBtn?.addEventListener("click", async () => {
         );
         const bookingsSnap = await getDocs(bookingsQuery);
         const deleteBookingPromises = bookingsSnap.docs.map(doc => deleteDoc(doc.ref));
-        
+
         // Delete AI workouts
         const workoutsQuery = query(
             collection(db, "ai_workouts"),
@@ -4991,22 +4409,22 @@ deleteProfileBtn?.addEventListener("click", async () => {
         );
         const workoutsSnap = await getDocs(workoutsQuery);
         const deleteWorkoutPromises = workoutsSnap.docs.map(doc => deleteDoc(doc.ref));
-        
+
         // Wait for all deletions
         await Promise.all([...deleteBookingPromises, ...deleteWorkoutPromises]);
-        
+
         // Delete user profile
         await deleteDoc(userRef);
-        
+
         // Reset button state before sign out
         deleteProfileBtn.disabled = false;
         deleteProfileBtn.textContent = '🗑️ Delete Profile';
-        
+
         // Sign out and show goodbye message
         alert('😢 Sorry to see you go!\n\nYour profile and data have been permanently deleted.\n\nWe hope to see you again in the future. Stay healthy!');
-        
+
         await signOut(auth);
-        
+
     } catch (error) {
         console.error('Failed to delete profile:', error);
         alert('Failed to delete profile: ' + error.message);
@@ -5031,21 +4449,21 @@ const deleteCoachProfileBtn = document.getElementById("delete-coach-profile-btn"
 deleteCoachProfileBtn?.addEventListener("click", async () => {
     const user = auth.currentUser;
     if (!user || !currentCoachId) return;
-    
+
     const confirmMessage = "⚠️ Are you sure you want to delete your coach profile?\n\nThis will permanently remove:\n• Your coach profile\n• All your booking history\n• Your availability and settings\n\nThis action cannot be undone.";
-    
+
     if (!confirm(confirmMessage)) return;
-    
+
     // Final confirmation
     const finalConfirm = prompt("Type 'DELETE' to confirm coach profile deletion:");
     if (finalConfirm !== 'DELETE') {
         alert('Coach profile deletion cancelled.');
         return;
     }
-    
+
     deleteCoachProfileBtn.disabled = true;
     deleteCoachProfileBtn.textContent = 'Deleting...';
-    
+
     try {
         // Delete coach bookings
         const bookingsQuery = query(
@@ -5054,7 +4472,7 @@ deleteCoachProfileBtn?.addEventListener("click", async () => {
         );
         const bookingsSnap = await getDocs(bookingsQuery);
         const deleteBookingPromises = bookingsSnap.docs.map(doc => deleteDoc(doc.ref));
-        
+
         // Delete notifications for this coach
         const notificationsQuery = query(
             collection(db, "notifications"),
@@ -5062,24 +4480,24 @@ deleteCoachProfileBtn?.addEventListener("click", async () => {
         );
         const notificationsSnap = await getDocs(notificationsQuery);
         const deleteNotificationPromises = notificationsSnap.docs.map(doc => deleteDoc(doc.ref));
-        
+
         // Wait for all deletions
         await Promise.all([...deleteBookingPromises, ...deleteNotificationPromises]);
-        
+
         // Delete coach profile
         const coachRef = doc(db, "coaches", currentCoachId);
         await deleteDoc(coachRef);
-        
+
         // Reset button state before sign out
         deleteCoachProfileBtn.disabled = false;
         deleteCoachProfileBtn.textContent = '🗑️ Delete Coach Profile';
-        
+
         // Sign out and show goodbye message
         alert('😢 Sorry to see you go!\n\nYour coach profile and data have been permanently deleted.\n\nWe hope to see you again in the future. Keep inspiring others to stay fit!');
-        
+
         currentCoachId = null;
         await signOut(auth);
-        
+
     } catch (error) {
         console.error('Failed to delete coach profile:', error);
         alert('Failed to delete coach profile: ' + error.message);
@@ -5093,12 +4511,12 @@ coachProfileForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const user = auth.currentUser;
     if (!user) return;
-    
+
     coachProfileStatus.textContent = "Saving...";
     try {
         await saveCoachProfile(user);
-        coachProfileStatus.textContent = "Profile saved! Loading dashboard...";
-        
+        coachProfileStatus.textContent = "Profile saved! Your account is pending admin approval before you can receive bookings.";
+
         // Reload coach profile to show dashboard
         const coachId = await loadCoachProfile(user.email);
         if (coachId) {
@@ -5155,27 +4573,27 @@ saveSessionNotesBtn?.addEventListener("click", async () => {
 generateWorkoutBtn.addEventListener("click", async () => {
     const user = auth.currentUser;
     if (!user) return;
-    
+
     // Check if profile is complete
     if (!heightEl.value || !weightEl.value || !goalEl.value) {
         alert('Please complete your profile first (height, weight, and goal are required).');
         return;
     }
-    
+
     generateWorkoutBtn.disabled = true;
     generateWorkoutBtn.textContent = 'Generating...';
-    
+
     try {
         const userRef = doc(db, "users", user.uid);
         const userSnap = await getDoc(userRef);
-        
+
         if (!userSnap.exists()) {
             alert('Please save your profile first.');
             return;
         }
-        
+
         const userProfile = userSnap.data();
-        
+
         // Get recent workouts to avoid repetition
         let recentWorkouts = [];
         try {
@@ -5216,7 +4634,7 @@ generateWorkoutBtn.addEventListener("click", async () => {
                 console.warn('Fallback workout fetch also failed:', fallbackError.message);
             }
         }
-        
+
         // Use saved AI analysis if available for personalized workout
         let workout;
         console.log('🤖 Determining workout generation method...');
@@ -5243,15 +4661,43 @@ generateWorkoutBtn.addEventListener("click", async () => {
                 firstExercise: workout?.[0] || 'none'
             });
         }
-        
-        renderAIWorkout(workout);
-        
+
+        // Convert array response to expected workout object format
+        let workoutData;
+        if (Array.isArray(workout)) {
+            console.log('🔄 Converting array workout to object format');
+            workoutData = {
+                title: `${userProfile.goal || 'Fitness'} Workout`,
+                intensity: 'moderate',
+                duration: 30,
+                estimatedCalories: 200,
+                exercises: workout.map(ex => ({
+                    name: ex,
+                    checklistItem: ex
+                })),
+                warmup: {
+                    description: 'Light cardio and dynamic stretches',
+                    checklistItems: ['5 minutes of light cardio', 'Dynamic arm circles', 'Leg swings']
+                },
+                cooldown: {
+                    description: 'Gentle stretching',
+                    checklistItems: ['5 minutes of static stretches', 'Deep breathing']
+                },
+                equipmentNeeded: ['None - Bodyweight only'],
+                aiReasoning: `Personalized workout designed for your ${userProfile.goal || 'fitness'} goals`
+            };
+        } else {
+            workoutData = workout;
+        }
+
+        renderAIWorkout(workoutData);
+
         // Save workout to history for immediate future variation
         try {
             await addDoc(collection(db, 'ai_workouts'), {
                 userId: user.uid,
                 workout: {
-                    exercises: workout,
+                    exercises: Array.isArray(workout) ? workout : (workout.exercises || []),
                     generatedAt: new Date(),
                     userProfile: {
                         goal: userProfile.goal,
@@ -5266,7 +4712,7 @@ generateWorkoutBtn.addEventListener("click", async () => {
         } catch (error) {
             console.warn('Could not save workout to history:', error.message);
         }
-        
+
     } catch (error) {
         console.error('Failed to generate workout:', error);
         console.error('Error details:', {
@@ -5274,11 +4720,11 @@ generateWorkoutBtn.addEventListener("click", async () => {
             code: error.code,
             stack: error.stack
         });
-        
+
         if (error.message.includes('429') || error.message.includes('quota') || error.message.includes('exceeded')) {
-            alert('⚠️ OpenAI API quota exceeded.\n\nYour OpenAI account has run out of credits.\n\nOptions:\n1. Add billing at https://platform.openai.com/account/billing\n2. Create a new OpenAI account with $5 free credits\n3. Continue using the app without AI features\n\nThe rest of the app still works!');
-        } else if (error.message.includes('API request failed')) {
-            alert('OpenAI API Error: ' + error.message + '\n\nPlease check:\n1. Your API key is correct\n2. Your OpenAI account has credits\n3. Visit https://platform.openai.com/account/billing');
+            alert('⚠️ AI API quota exceeded.\n\nThe AI service has reached its usage limit.\n\nPlease try again later or contact the administrator.\nThe rest of the app still works!');
+        } else if (error.message.includes('AI request failed') || error.message.includes('AI service')) {
+            alert('AI Service Error: ' + error.message + '\n\nPlease check:\n1. You are signed in\n2. The AI service is configured on the server\n3. Try refreshing the page');
         } else {
             alert('Failed to generate workout: ' + (error.message || 'Unknown error') + '\n\nCheck browser console (F12) for details.');
         }
@@ -5291,7 +4737,7 @@ generateWorkoutBtn.addEventListener("click", async () => {
 function renderAIWorkout(workout) {
     aiWorkoutEmpty.classList.add('hidden');
     aiWorkoutContainer.classList.remove('hidden');
-    
+
     const exercisesList = workout.exercises.map((ex, index) => `
         <div class="border-l-4 border-indigo-500 pl-3 py-2">
             <label class="flex items-start gap-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded transition-colors">
@@ -5306,25 +4752,25 @@ function renderAIWorkout(workout) {
             </label>
         </div>
     `).join('');
-    
-    const warmupItems = workout.warmup?.checklistItems?.map((item, index) => 
+
+    const warmupItems = workout.warmup?.checklistItems?.map((item, index) =>
         `<label class="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="warmup-${index}">
             <span class="text-sm">${item}</span>
         </label>`
     ).join('') || `<p class="text-sm">${workout.warmup?.description || workout.warmup}</p>`;
-    
-    const cooldownItems = workout.cooldown?.checklistItems?.map((item, index) => 
+
+    const cooldownItems = workout.cooldown?.checklistItems?.map((item, index) =>
         `<label class="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="cooldown-${index}">
             <span class="text-sm">${item}</span>
         </label>`
     ).join('') || `<p class="text-sm">${workout.cooldown?.description || workout.cooldown}</p>`;
-    
-    const equipmentBadges = workout.equipmentNeeded?.map(eq => 
+
+    const equipmentBadges = workout.equipmentNeeded?.map(eq =>
         `<span class="inline-block bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 px-2 py-1 rounded text-xs">${eq}</span>`
     ).join(' ') || 'No equipment needed';
-    
+
     aiWorkoutContent.innerHTML = `
         <div class="space-y-4">
             <div class="flex items-start justify-between">
@@ -5401,19 +4847,697 @@ userDisplayEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     userDropdown.classList.toggle("hidden");
     coachDropdown?.classList.add("hidden"); // Close coach dropdown if open
+    adminDropdown?.classList.add("hidden"); // Close admin dropdown if open
 });
 
 coachDisplayEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     coachDropdown.classList.toggle("hidden");
     userDropdown?.classList.add("hidden"); // Close user dropdown if open
+    adminDropdown?.classList.add("hidden"); // Close admin dropdown if open
+});
+
+adminDisplayEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    adminDropdown.classList.toggle("hidden");
+    userDropdown?.classList.add("hidden"); // Close user dropdown if open
+    coachDropdown?.classList.add("hidden"); // Close coach dropdown if open
 });
 
 // Close dropdowns when clicking outside
 document.addEventListener("click", () => {
     userDropdown?.classList.add("hidden");
     coachDropdown?.classList.add("hidden");
+    adminDropdown?.classList.add("hidden");
 });
+
+// Admin sign out handler
+btnAdminSignOut?.addEventListener("click", async () => {
+    await signOut(auth);
+    userType = null;
+    localStorage.removeItem('userType');
+});
+
+// ========== ADMIN ACCESS CONTROL ==========
+
+// Admin access code (change this to your desired code)
+const ADMIN_ACCESS_CODE = "FIT@COACHADMIN2026"; // Change this to your secure code
+
+/**
+ * Open admin access modal
+ */
+function openAdminAccessModal() {
+    adminCodeInput.value = "";
+    adminCodeError.classList.add("hidden");
+    adminAccessModal.classList.remove("hidden");
+    adminCodeInput.focus();
+}
+
+/**
+ * Close admin access modal
+ */
+function closeAdminAccessModal() {
+    adminAccessModal.classList.add("hidden");
+    adminCodeInput.value = "";
+    adminCodeError.classList.add("hidden");
+}
+
+/**
+ * Verify admin access code and proceed to login
+ */
+function verifyAdminCode() {
+    const enteredCode = adminCodeInput.value.trim();
+
+    if (enteredCode === ADMIN_ACCESS_CODE) {
+        // Code is correct, proceed with admin login
+        closeAdminAccessModal();
+        userType = 'admin';
+        localStorage.setItem('userType', 'admin');
+        signInUser();
+    } else {
+        // Code is incorrect, show error
+        adminCodeError.classList.remove("hidden");
+        adminCodeInput.value = "";
+        adminCodeInput.focus();
+
+        // Auto-hide error after 3 seconds
+        setTimeout(() => {
+            adminCodeError.classList.add("hidden");
+        }, 3000);
+    }
+}
+
+// Admin access modal event listeners
+adminCodeCancel?.addEventListener("click", closeAdminAccessModal);
+adminCodeVerify?.addEventListener("click", verifyAdminCode);
+
+// Handle Enter key in admin code input
+adminCodeInput?.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+        verifyAdminCode();
+    }
+});
+
+// Close modal when clicking outside
+adminAccessModal?.addEventListener("click", (e) => {
+    if (e.target === adminAccessModal) {
+        closeAdminAccessModal();
+    }
+});
+
+// ========== ADMIN FUNCTIONS ==========
+
+/**
+ * Check if user has admin role
+ */
+async function checkAdminRole(email) {
+    try {
+        const adminsRef = collection(db, 'admins');
+        const q = query(adminsRef, where('email', '==', email));
+        const snapshot = await getDocs(q);
+        return !snapshot.empty;
+    } catch (error) {
+        console.error('Error checking admin role:', error);
+        return false;
+    }
+}
+
+/**
+ * Update lastLoginAt timestamp for activity tracking
+ */
+async function updateLastLogin(userId, email) {
+    try {
+        // Update in users collection if exists
+        const userRef = doc(db, 'users', userId);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+            await updateDoc(userRef, {
+                lastLoginAt: serverTimestamp(),
+                email: email
+            });
+        }
+
+        // Update in coaches collection if exists
+        const coachesRef = collection(db, 'coaches');
+        const coachQuery = query(coachesRef, where('email', '==', email));
+        const coachSnap = await getDocs(coachQuery);
+        if (!coachSnap.empty) {
+            const coachDoc = coachSnap.docs[0];
+            await updateDoc(doc(db, 'coaches', coachDoc.id), {
+                lastLoginAt: serverTimestamp()
+            });
+        }
+    } catch (error) {
+        console.error('Error updating last login:', error);
+    }
+}
+
+/**
+ * Fetch admin analytics data
+ */
+async function fetchAdminAnalytics() {
+    try {
+        const now = new Date();
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+        // Fetch all users
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const users = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Fetch all coaches
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+        const coaches = coachesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Fetch all bookings
+        const bookingsSnapshot = await getDocs(collection(db, 'bookings'));
+        const bookings = bookingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Calculate statistics
+        const usersLast7 = users.filter(u => {
+            const createdAt = u.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+
+        const coachesLast7 = coaches.filter(c => {
+            const createdAt = c.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+
+        const bookingsLast7 = bookings.filter(b => {
+            const createdAt = b.createdAt?.toDate();
+            return createdAt && createdAt >= sevenDaysAgo;
+        }).length;
+
+        // Find inactive users (no login in 3+ days)
+        const inactiveUsers = [...users, ...coaches].filter(account => {
+            const lastLogin = account.lastLoginAt?.toDate();
+            if (!lastLogin) return true; // Never logged in
+            return lastLogin < threeDaysAgo;
+        });
+
+        // Count pending coaches
+        const pendingCoaches = coaches.filter(c => c.approved === false).length;
+
+        // Update UI
+        totalUsersCount.textContent = users.length;
+        totalCoachesCount.textContent = `${coaches.length} (${pendingCoaches} pending)`;
+        totalBookingsCount.textContent = bookings.length;
+        inactiveUsersCount.textContent = inactiveUsers.length;
+        usersLast7Days.textContent = `+${usersLast7} in last 7 days`;
+        coachesLast7Days.textContent = `+${coachesLast7} in last 7 days`;
+        bookingsLast7Days.textContent = `+${bookingsLast7} in last 7 days`;
+
+        // Fetch recent activity
+        await fetchRecentActivity();
+
+    } catch (error) {
+        console.error('Error fetching admin analytics:', error);
+        alert('Failed to load analytics data');
+    }
+}
+
+/**
+ * Fetch recent activity
+ */
+async function fetchRecentActivity() {
+    try {
+        const activities = [];
+
+        // Get recent bookings
+        const bookingsQuery = query(
+            collection(db, 'bookings'),
+            orderBy('createdAt', 'desc'),
+            limit(10)
+        );
+        const bookingsSnap = await getDocs(bookingsQuery);
+        bookingsSnap.forEach(doc => {
+            const data = doc.data();
+            activities.push({
+                type: 'booking',
+                timestamp: data.createdAt?.toDate(),
+                description: `New booking: ${data.userName} with ${data.coachName}`,
+                data: data
+            });
+        });
+
+        // Get recent workout sessions
+        const sessionsQuery = query(
+            collection(db, 'workoutSessions'),
+            orderBy('completedAt', 'desc'),
+            limit(10)
+        );
+        const sessionsSnap = await getDocs(sessionsQuery);
+        sessionsSnap.forEach(doc => {
+            const data = doc.data();
+            activities.push({
+                type: 'session',
+                timestamp: data.completedAt?.toDate(),
+                description: `Session completed: ${data.userName || 'User'} with coach`,
+                data: data
+            });
+        });
+
+        // Sort by timestamp
+        activities.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        // Render activities
+        renderRecentActivity(activities.slice(0, 20));
+
+    } catch (error) {
+        console.error('Error fetching recent activity:', error);
+    }
+}
+
+/**
+ * Render recent activity list
+ */
+function renderRecentActivity(activities) {
+    if (!activities || activities.length === 0) {
+        recentActivityList.innerHTML = '<p class="p-4 text-sm text-gray-500 dark:text-gray-400 italic">No recent activity</p>';
+        return;
+    }
+
+    recentActivityList.innerHTML = activities.map(activity => {
+        const timeStr = activity.timestamp ? activity.timestamp.toLocaleString() : 'Unknown time';
+        const iconColor = activity.type === 'booking' ? 'text-blue-600' : 'text-green-600';
+        const icon = activity.type === 'booking' ? '📅' : '✅';
+
+        return `
+            <div class="p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                <div class="flex items-start gap-3">
+                    <span class="text-xl">${icon}</span>
+                    <div class="flex-1">
+                        <p class="text-sm text-gray-900 dark:text-gray-100">${activity.description}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${timeStr}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Send re-engagement emails to inactive users
+ */
+async function sendReEngagementEmails() {
+    try {
+        const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+
+        // Fetch users
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+
+        const allAccounts = [
+            ...usersSnapshot.docs.map(doc => ({ id: doc.id, type: 'user', ...doc.data() })),
+            ...coachesSnapshot.docs.map(doc => ({ id: doc.id, type: 'coach', ...doc.data() }))
+        ];
+
+        // Filter inactive accounts
+        const inactiveAccounts = allAccounts.filter(account => {
+            const lastLogin = account.lastLoginAt?.toDate();
+            if (!lastLogin) return true; // Never logged in
+            return lastLogin < threeDaysAgo;
+        });
+
+        if (inactiveAccounts.length === 0) {
+            alert('No inactive users found!');
+            return;
+        }
+
+        const confirmSend = confirm(`Found ${inactiveAccounts.length} inactive users. Send re-engagement emails?`);
+        if (!confirmSend) return;
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const account of inactiveAccounts) {
+            try {
+                // Skip if already sent email recently
+                if (account.lastEmailSentAt) {
+                    const lastEmailDate = account.lastEmailSentAt.toDate();
+                    const daysSinceEmail = (Date.now() - lastEmailDate.getTime()) / (24 * 60 * 60 * 1000);
+                    if (daysSinceEmail < 7) {
+                        console.log(`Skipping ${account.email} - email sent ${Math.floor(daysSinceEmail)} days ago`);
+                        continue;
+                    }
+                }
+
+                await sendEmailViaEmailJS(
+                    account.email,
+                    account.name || account.email,
+                    account.type
+                );
+
+                // Update lastEmailSentAt timestamp
+                const collectionName = account.type === 'user' ? 'users' : 'coaches';
+                await updateDoc(doc(db, collectionName, account.id), {
+                    lastEmailSentAt: serverTimestamp()
+                });
+
+                successCount++;
+
+            } catch (error) {
+                console.error(`Failed to send email to ${account.email}:`, error);
+                failCount++;
+            }
+        }
+
+        alert(`Emails sent!\nSuccess: ${successCount}\nFailed: ${failCount}`);
+
+    } catch (error) {
+        console.error('Error sending re-engagement emails:', error);
+        alert('Failed to send emails');
+    }
+}
+
+/**
+ * Send email via EmailJS
+ */
+async function sendEmailViaEmailJS(toEmail, toName, accountType) {
+    const templateParams = {
+        to_email: toEmail,
+        to_name: toName,
+        account_type: accountType,
+        app_name: 'Find My Fit Coach',
+        message: accountType === 'coach'
+            ? 'We noticed you haven\'t logged in recently. Your clients are waiting for you! Come back and continue helping people achieve their fitness goals.'
+            : 'We noticed you haven\'t logged in recently. Don\'t give up on your fitness journey! Our coaches are ready to help you achieve your goals.'
+    };
+
+    return emailjs.send(
+        'YOUR_SERVICE_ID', // Replace with your EmailJS service ID
+        'YOUR_TEMPLATE_ID', // Replace with your EmailJS template ID
+        templateParams
+    );
+}
+
+/**
+ * Search users by name or email
+ */
+async function searchUsers(searchTerm) {
+    try {
+        const usersSnapshot = await getDocs(collection(db, 'users'));
+        const coachesSnapshot = await getDocs(collection(db, 'coaches'));
+
+        const allAccounts = [
+            ...usersSnapshot.docs.map(doc => ({ id: doc.id, type: 'user', ...doc.data() })),
+            ...coachesSnapshot.docs.map(doc => ({ id: doc.id, type: 'coach', ...doc.data() }))
+        ];
+
+        const filtered = allAccounts.filter(account => {
+            const name = (account.name || '').toLowerCase();
+            const email = (account.email || '').toLowerCase();
+            const search = searchTerm.toLowerCase();
+            return name.includes(search) || email.includes(search);
+        });
+
+        renderUsersList(filtered);
+
+    } catch (error) {
+        console.error('Error searching users:', error);
+        alert('Failed to search users');
+    }
+}
+
+/**
+ * Render users list
+ */
+function renderUsersList(accounts) {
+    if (!accounts || accounts.length === 0) {
+        usersList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 italic">No users found</p>';
+        return;
+    }
+
+    usersList.innerHTML = accounts.map(account => {
+        const lastLogin = account.lastLoginAt?.toDate();
+        const lastLoginStr = lastLogin ? lastLogin.toLocaleDateString() : 'Never';
+        const badge = account.type === 'coach' ? 'Coach' : 'User';
+        const badgeColor = account.type === 'coach' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+
+        return `
+            <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <p class="font-medium text-gray-900 dark:text-gray-100">${account.name || account.email}</p>
+                            <span class="text-xs px-2 py-1 rounded-full ${badgeColor}">${badge}</span>
+                        </div>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">${account.email}</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">Last login: ${lastLoginStr}</p>
+                    </div>
+                    <button onclick="sendManualEmail('${account.email}', '${account.name || account.email}')" 
+                        class="px-3 py-1 text-sm rounded-md bg-orange-600 hover:bg-orange-700 text-white">
+                        Email
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Send manual email to specific user
+ */
+window.sendManualEmail = async function (email, name) {
+    const message = prompt(`Enter message to send to ${name}:`);
+    if (!message) return;
+
+    try {
+        await emailjs.send(
+            'YOUR_SERVICE_ID', // Replace with your EmailJS service ID
+            'YOUR_TEMPLATE_ID', // Replace with your EmailJS template ID
+            {
+                to_email: email,
+                to_name: name,
+                app_name: 'Find My Fit Coach',
+                message: message
+            }
+        );
+        alert('Email sent successfully!');
+    } catch (error) {
+        console.error('Error sending email:', error);
+        alert('Failed to send email');
+    }
+};
+
+/**
+ * Setup admin event listeners
+ */
+function setupAdminEventListeners() {
+    refreshAdminStats?.addEventListener('click', fetchAdminAnalytics);
+    sendEngagementEmails?.addEventListener('click', sendReEngagementEmails);
+    searchUsersBtn?.addEventListener('click', () => {
+        const searchTerm = userSearch.value.trim();
+        if (searchTerm) {
+            searchUsers(searchTerm);
+        }
+    });
+
+    userSearch?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const searchTerm = userSearch.value.trim();
+            if (searchTerm) {
+                searchUsers(searchTerm);
+            }
+        }
+    });
+
+    activityFilter?.addEventListener('change', fetchRecentActivity);
+
+    // Coach management event listeners
+    refreshCoachesList?.addEventListener('click', fetchCoachesForApproval);
+    coachFilter?.addEventListener('change', fetchCoachesForApproval);
+
+    // Load coaches initially
+    fetchCoachesForApproval();
+}
+
+/**
+ * Display coach approval status in coach dashboard
+ */
+function displayCoachApprovalStatus(approved) {
+    if (!coachApprovalStatus) return;
+
+    if (approved) {
+        coachApprovalStatus.innerHTML = `
+            <div class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg">
+                <svg class="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <span class="text-sm font-medium text-green-700 dark:text-green-300">Approved - Visible to Users</span>
+            </div>
+        `;
+    } else {
+        coachApprovalStatus.innerHTML = `
+            <div class="inline-flex items-center gap-2 px-3 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800 rounded-lg">
+                <svg class="w-4 h-4 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="text-sm font-medium text-orange-700 dark:text-orange-300">Pending Admin Approval</span>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Fetch coaches for admin approval management
+ */
+async function fetchCoachesForApproval() {
+    try {
+        const filter = coachFilter?.value || 'all';
+        const coachesRef = collection(db, 'coaches');
+        let q;
+
+        if (filter === 'pending') {
+            q = query(coachesRef, where('approved', '==', false), orderBy('createdAt', 'desc'));
+        } else if (filter === 'approved') {
+            q = query(coachesRef, where('approved', '==', true), orderBy('createdAt', 'desc'));
+        } else {
+            q = query(coachesRef, orderBy('createdAt', 'desc'));
+        }
+
+        const snapshot = await getDocs(q);
+        const coaches = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        renderCoachesList(coaches);
+
+    } catch (error) {
+        console.error('Error fetching coaches:', error);
+        if (coachesList) {
+            coachesList.innerHTML = '<p class="text-sm text-red-500">Error loading coaches</p>';
+        }
+    }
+}
+
+/**
+ * Render coaches list for admin management
+ */
+function renderCoachesList(coaches) {
+    if (!coachesList) return;
+
+    if (!coaches || coaches.length === 0) {
+        coachesList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 italic">No coaches found</p>';
+        return;
+    }
+
+    coachesList.innerHTML = coaches.map(coach => {
+        const createdAt = coach.createdAt?.toDate();
+        const createdStr = createdAt ? createdAt.toLocaleDateString() : 'Unknown';
+        const approved = coach.approved;
+        const statusColor = approved ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
+        const statusText = approved ? 'Approved' : 'Pending';
+
+        return `
+            <div class="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-3 mb-2">
+                            <h4 class="font-medium text-gray-900 dark:text-gray-100">${coach.name || coach.email}</h4>
+                            <span class="text-xs px-2 py-1 rounded-full ${statusColor}">${statusText}</span>
+                        </div>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">${coach.email}</p>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            Experience: ${coach.yearsExperience || 0} years | Rate: $${coach.hourlyRate || 0}/hr
+                        </p>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            Specializations: ${coach.specializations?.join(', ') || 'None'}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-500 mt-2">Registered: ${createdStr}</p>
+                        ${coach.bio ? `<p class="text-sm text-gray-700 dark:text-gray-300 mt-2 p-2 bg-gray-100 dark:bg-gray-700 rounded">${coach.bio}</p>` : ''}
+                    </div>
+                    <div class="flex flex-col gap-2 ml-4">
+                        ${!approved ? `
+                            <button onclick="approveCoach('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-green-600 hover:bg-green-700 text-white">
+                                Approve
+                            </button>
+                            <button onclick="rejectCoach('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-red-600 hover:bg-red-700 text-white">
+                                Reject
+                            </button>
+                        ` : `
+                            <button onclick="revokeCoachApproval('${coach.id}')" 
+                                class="px-3 py-1 text-sm rounded-md bg-orange-600 hover:bg-orange-700 text-white">
+                                Revoke
+                            </button>
+                        `}
+                        <button onclick="sendManualEmail('${coach.email}', '${coach.name || coach.email}')" 
+                            class="px-3 py-1 text-sm rounded-md bg-blue-600 hover:bg-blue-700 text-white">
+                            Email
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Approve a coach
+ */
+window.approveCoach = async function (coachId) {
+    if (!confirm('Approve this coach? They will become visible to users.')) return;
+
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: true,
+            approvedAt: serverTimestamp()
+        });
+
+        alert('Coach approved successfully!');
+        fetchCoachesForApproval();
+
+    } catch (error) {
+        console.error('Error approving coach:', error);
+        alert('Failed to approve coach');
+    }
+};
+
+/**
+ * Reject a coach
+ */
+window.rejectCoach = async function (coachId) {
+    const reason = prompt('Enter reason for rejection (optional):');
+    if (reason === null) return; // User cancelled
+
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: false,
+            rejectedAt: serverTimestamp(),
+            rejectionReason: reason || 'No reason provided'
+        });
+
+        alert('Coach rejected successfully!');
+        fetchCoachesForApproval();
+
+    } catch (error) {
+        console.error('Error rejecting coach:', error);
+        alert('Failed to reject coach');
+    }
+};
+
+/**
+ * Revoke coach approval
+ */
+window.revokeCoachApproval = async function (coachId) {
+    if (!confirm('Revoke approval for this coach? They will no longer be visible to users.')) return;
+
+    try {
+        await updateDoc(doc(db, 'coaches', coachId), {
+            approved: false,
+            revokedAt: serverTimestamp()
+        });
+
+        alert('Coach approval revoked successfully!');
+        fetchCoachesForApproval();
+
+    } catch (error) {
+        console.error('Error revoking coach approval:', error);
+        alert('Failed to revoke coach approval');
+    }
+};
+
 
 // Prevent dropdown from closing when clicking inside
 userDropdown?.addEventListener("click", (e) => {
@@ -5427,7 +5551,7 @@ coachDropdown?.addEventListener("click", (e) => {
 // Presence tracking functions
 async function updatePresence(isOnline = true) {
     if (!auth.currentUser || userType !== 'coach') return;
-    
+
     try {
         const coachRef = doc(db, "coaches", currentCoachId || auth.currentUser.uid);
         await updateDoc(coachRef, {
@@ -5442,25 +5566,25 @@ async function updatePresence(isOnline = true) {
 
 function startPresenceTracking() {
     if (userType !== 'coach' || !auth.currentUser) return;
-    
+
     // Clear any existing heartbeat
     if (presenceHeartbeat) {
         clearInterval(presenceHeartbeat);
     }
-    
+
     // Set initial online status
     updatePresence(true);
-    
+
     // Send heartbeat every 30 seconds
     presenceHeartbeat = setInterval(() => {
         updatePresence(true);
     }, ONLINE_PRESENCE_INTERVAL);
-    
+
     // Set offline on page unload
     window.addEventListener('beforeunload', () => {
         updatePresence(false);
     });
-    
+
     // Handle visibility changes (tab switching, etc.)
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
@@ -5469,7 +5593,7 @@ function startPresenceTracking() {
             updatePresence(true);
         }
     });
-    
+
     console.log('🟢 Coach presence tracking started');
 }
 
@@ -5478,22 +5602,22 @@ function stopPresenceTracking() {
         clearInterval(presenceHeartbeat);
         presenceHeartbeat = null;
     }
-    
+
     if (userType === 'coach' && auth.currentUser) {
         updatePresence(false);
     }
-    
+
     console.log('🔴 Coach presence tracking stopped');
 }
 
 function startCoachPresenceListener() {
     if (userType !== 'user') return; // Only for users viewing coaches
-    
+
     // Clean up existing listener
     if (coachPresenceListener) {
         coachPresenceListener();
     }
-    
+
     const q = query(collection(db, "coaches"));
     coachPresenceListener = onSnapshot(q, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
@@ -5503,19 +5627,19 @@ function startCoachPresenceListener() {
             }
         });
     });
-    
+
     console.log('👁️ Coach presence listener started');
 }
 
 function updateCoachPresenceUI(coachData) {
     const coachCard = document.querySelector(`[data-coach-id="${coachData.id}"]`);
     if (!coachCard) return;
-    
+
     const presenceIndicator = coachCard.querySelector('.presence-indicator');
     if (!presenceIndicator) return;
-    
+
     const isOnline = isCoachOnline(coachData);
-    
+
     if (isOnline) {
         presenceIndicator.classList.remove('bg-gray-400');
         presenceIndicator.classList.add('bg-green-500');
@@ -5523,7 +5647,7 @@ function updateCoachPresenceUI(coachData) {
     } else {
         presenceIndicator.classList.remove('bg-green-500');
         presenceIndicator.classList.add('bg-gray-400');
-        
+
         const lastSeen = getLastSeenText(coachData.lastSeen);
         presenceIndicator.title = lastSeen;
     }
@@ -5534,27 +5658,27 @@ function isCoachOnline(coachData) {
     if (!coachData.hasOwnProperty('isOnline') || !coachData.hasOwnProperty('lastSeen')) {
         return null;
     }
-    
+
     if (!coachData.isOnline) return false;
     if (!coachData.lastSeen) return false;
-    
+
     const now = new Date();
     const lastSeen = coachData.lastSeen.toDate ? coachData.lastSeen.toDate() : new Date(coachData.lastSeen);
     const timeDiff = now - lastSeen;
-    
+
     return timeDiff < OFFLINE_TIMEOUT;
 }
 
 function getLastSeenText(lastSeen) {
     if (!lastSeen) return 'Status: N/A';
-    
+
     const lastSeenDate = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen);
     const now = new Date();
     const diffMs = now - lastSeenDate;
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
-    
+
     if (diffMins < 1) return 'Last seen: Just now';
     if (diffMins < 60) return `Last seen: ${diffMins}m ago`;
     if (diffHours < 24) return `Last seen: ${diffHours}h ago`;
@@ -5569,44 +5693,44 @@ const notificationSounds = {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
-        
+
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        
+
         // Pleasant chime sound for new booking
         oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
         oscillator.frequency.exponentialRampToValueAtTime(1000, audioContext.currentTime + 0.1);
         oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.3);
-        
+
         gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-        
+
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.5);
-        
+
         console.log('🔔 New booking notification sound played');
     },
-    
+
     bookingConfirmed: () => {
         // Create success sound for booking confirmation (user)
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
-        
+
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        
+
         // Success ding sound for booking confirmation
         oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
         oscillator.frequency.setValueAtTime(659.25, audioContext.currentTime + 0.1); // E5
         oscillator.frequency.setValueAtTime(783.99, audioContext.currentTime + 0.2); // G5
-        
+
         gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
-        
+
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.4);
-        
+
         console.log('✅ Booking confirmed notification sound played');
     }
 };
@@ -5621,7 +5745,7 @@ function showNotificationWithSound(title, message, soundType) {
     } catch (error) {
         console.warn('Could not play notification sound:', error);
     }
-    
+
     // Show browser notification if permission granted
     if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(title, {
@@ -5631,27 +5755,27 @@ function showNotificationWithSound(title, message, soundType) {
             tag: 'fitness-booking'
         });
     }
-    
+
     console.log('📢 Notification shown:', title, '-', message);
 }
 
 // Pre-Session Review Functions
 async function showPreSessionReview(booking) {
     currentReviewBooking = booking;
-    
+
     // Update UI with booking info
     document.getElementById('review-user-name').textContent = booking.userName || booking.userEmail;
     document.getElementById('review-user-goal').textContent = booking.goal || 'No specific goal';
-    
+
     // Show the modal
     preSessionModal.classList.remove('hidden');
-    
+
     // Load user profile data
     await loadUserDataForReview(booking);
-    
+
     // Generate AI analysis
     await generateAISessionAnalysis(booking);
-    
+
     // Load session history
     await loadSessionHistoryForReview(booking);
 }
@@ -5661,7 +5785,7 @@ async function loadUserDataForReview(booking) {
         // Get user profile data
         const userProfileRef = doc(db, 'users', booking.userId);
         const userProfileSnap = await getDoc(userProfileRef);
-        
+
         if (userProfileSnap.exists()) {
             const userData = userProfileSnap.data();
             document.getElementById('review-user-height').textContent = userData.height ? `${userData.height} cm` : 'Not specified';
@@ -5677,7 +5801,7 @@ async function generateAISessionAnalysis(booking) {
     try {
         aiAnalysisLoading.classList.remove('hidden');
         aiAnalysisContent.classList.add('hidden');
-        
+
         // Get user's past booking sessions for context (same as session history)
         let sessionHistory = [];
         try {
@@ -5711,12 +5835,12 @@ async function generateAISessionAnalysis(booking) {
                 sessionHistory = [];
             }
         }
-        
+
         // Get user profile for context
         const userProfileRef = doc(db, 'users', booking.userId);
         const userProfileSnap = await getDoc(userProfileRef);
         const userProfile = userProfileSnap.exists() ? userProfileSnap.data() : {};
-        
+
         // Create prompt for AI analysis with default values
         const analysisPrompt = `As a fitness coach, provide a brief pre-session analysis for this client (MAX 400 words):
 
@@ -5727,13 +5851,13 @@ CLIENT:
 - Age: ${userProfile.age || 30} (${userProfile.age ? 'actual' : 'default average'})
 - Requirements: ${userProfile.requirements || 'None'}
 - Past Sessions with You: ${sessionHistory.length} completed sessions
-${sessionHistory.length > 0 ? 
-    '\nPAST SESSIONS:\n' + sessionHistory.map((s, i) => {
-        const date = new Date(s.scheduledAt?.toMillis?.() || s.createdAt?.toMillis?.()).toLocaleDateString();
-        return `${i+1}. ${s.goal} - ${date}${s.coachNotes ? '\n   Your Notes: ' + s.coachNotes : ''}`;
-    }).join('\n') :
-    '\nNo previous sessions with this client yet.'
-}
+${sessionHistory.length > 0 ?
+                '\nPAST SESSIONS:\n' + sessionHistory.map((s, i) => {
+                    const date = new Date(s.scheduledAt?.toMillis?.() || s.createdAt?.toMillis?.()).toLocaleDateString();
+                    return `${i + 1}. ${s.goal} - ${date}${s.coachNotes ? '\n   Your Notes: ' + s.coachNotes : ''}`;
+                }).join('\n') :
+                '\nNo previous sessions with this client yet.'
+            }
 
 Provide CONCISE insights using simple HTML tags:
 
@@ -5752,19 +5876,19 @@ Provide CONCISE insights using simple HTML tags:
 </div>
 
 Return ONLY the content between the <div class="space-y-3"> tags, without any code block markers or extra formatting.`;
-        
+
         // Get AI analysis
         console.log('🤖 Starting AI analysis with prompt:', analysisPrompt.substring(0, 100) + '...');
         console.log('📊 User profile:', userProfile);
         console.log('📚 Session history:', sessionHistory);
-        
+
         const analysis = await aiService.generateCoachingInsights({
             prompt: analysisPrompt,
             userProfile: userProfile,
             workoutHistory: sessionHistory, // Using session history instead of workout history
             sessionGoal: booking.goal
         });
-        
+
         // Save AI analysis for workout generation with enhanced user profile
         savedAIAnalysis = {
             analysis: analysis,
@@ -5778,9 +5902,9 @@ Return ONLY the content between the <div class="space-y-3"> tags, without any co
             sessionHistory: sessionHistory,
             timestamp: Date.now()
         };
-        
+
         console.log('✅ AI analysis received and saved:', analysis.substring(0, 100) + '...');
-        
+
         // Display the analysis
         document.getElementById('ai-session-summary').innerHTML = `
             <div class="space-y-4">
@@ -5790,16 +5914,16 @@ Return ONLY the content between the <div class="space-y-3"> tags, without any co
                 </div>
             </div>
         `;
-        
+
         aiAnalysisLoading.classList.add('hidden');
         aiAnalysisContent.classList.remove('hidden');
-        
+
     } catch (error) {
         console.error('❌ Error generating AI analysis:', error);
         console.error('Error type:', error.constructor.name);
         console.error('Error message:', error.message);
         console.error('Error stack:', error.stack);
-        
+
         document.getElementById('ai-session-summary').innerHTML = `
             <div class="bg-red-50 p-4 rounded-lg border border-red-200">
                 <p class="text-red-700">Failed to generate AI analysis: ${error.message}</p>
@@ -5823,13 +5947,13 @@ async function loadSessionHistoryForReview(booking) {
             limit(5)
         );
         const pastBookings = await getDocs(pastBookingsQuery);
-        
+
         // Update count display
         const countElement = document.getElementById('past-sessions-count');
         if (countElement) {
             countElement.textContent = `${pastBookings.docs.length} session${pastBookings.docs.length !== 1 ? 's' : ''}`;
         }
-        
+
         if (pastBookings.empty) {
             document.getElementById('session-history-content').innerHTML = `
                 <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
@@ -5838,7 +5962,7 @@ async function loadSessionHistoryForReview(booking) {
             `;
             return;
         }
-        
+
         const historyHtml = pastBookings.docs.map(doc => {
             const session = doc.data();
             const date = new Date(session.scheduledAt?.toMillis?.() || session.createdAt?.toMillis?.()).toLocaleDateString();
@@ -5855,9 +5979,9 @@ async function loadSessionHistoryForReview(booking) {
                 </div>
             `;
         }).join('');
-        
+
         document.getElementById('session-history-content').innerHTML = historyHtml;
-        
+
     } catch (error) {
         console.error('Error loading session history:', error);
         document.getElementById('session-history-content').innerHTML = `
@@ -5865,7 +5989,7 @@ async function loadSessionHistoryForReview(booking) {
                 <p class="text-red-700">Failed to load session history.</p>
             </div>
         `;
-        
+
         const countElement = document.getElementById('past-sessions-count');
         if (countElement) {
             countElement.textContent = 'Error loading';
@@ -5875,11 +5999,11 @@ async function loadSessionHistoryForReview(booking) {
 
 async function completeReviewAndJoinSession() {
     if (!currentReviewBooking) return;
-    
+
     try {
         // Hide review modal
         preSessionModal.classList.add('hidden');
-        
+
         // Save notes if any
         const notes = coachSessionNotes.value.trim();
         if (notes) {
@@ -5888,21 +6012,21 @@ async function completeReviewAndJoinSession() {
                 notesUpdatedAt: serverTimestamp()
             });
         }
-        
+
         // Update booking status to active
         await updateDoc(doc(db, 'bookings', currentReviewBooking.id), {
             status: 'active',
             joinedAt: serverTimestamp(),
             reviewCompletedAt: serverTimestamp()
         });
-        
+
         // Start the video call
         const roomName = currentReviewBooking.meetingId || currentReviewBooking.meetingLink.split('/').pop().split('#')[0];
         const title = `Session with ${currentReviewBooking.userName || 'User'}`;
         startEmbeddedVideoCall(currentReviewBooking.id, roomName, title, true);
-        
+
         currentReviewBooking = null;
-        
+
     } catch (error) {
         console.error('Error completing review:', error);
         alert('Failed to start session: ' + error.message);
@@ -5916,7 +6040,7 @@ function closePreSessionReview() {
             status: 'confirmed'
         }).catch(console.error);
     }
-    
+
     preSessionModal.classList.add('hidden');
     currentReviewBooking = null;
     coachSessionNotes.value = '';
@@ -5931,18 +6055,52 @@ function requestNotificationPermission() {
 
 // Auth state changes
 onAuthStateChanged(auth, async (user) => {
-    console.log('🔑 Auth state changed. User:', user?.email || 'null', 'userType:', userType);
-    
     toggleAuthUI(user);
     if (user) {
         currentUserId = user.uid; // Set global user ID
-        console.log('🔑 User authenticated:', user.email, 'UID:', currentUserId, 'as:', userType);
-        
+        console.log('🔑 User authenticated:', user.email, 'UID:', currentUserId);
+
+        // Update lastLoginAt for activity tracking
+        await updateLastLogin(user.uid, user.email);
+
         // Request notification permission for booking alerts
         requestNotificationPermission();
-        
-        if (userType === 'coach') {
-            console.log('🏋️ Loading coach dashboard...');
+
+        if (userType === 'admin') {
+            // Check if user has admin permissions
+            const isAdmin = await checkAdminRole(user.email);
+            if (isAdmin) {
+                console.log('✅ Admin access granted');
+                await fetchAdminAnalytics();
+                setupAdminEventListeners();
+            } else {
+                // If not in admin list, add them automatically since they passed code verification
+                console.log('⚠️ Admin code verified but not in database. Adding to admin list...');
+                try {
+                    await addDoc(collection(db, 'admins'), {
+                        email: user.email,
+                        role: 'admin',
+                        name: user.displayName || user.email,
+                        createdAt: serverTimestamp(),
+                        addedViaCode: true
+                    });
+                    console.log('✅ Admin added to database');
+                    await fetchAdminAnalytics();
+                    setupAdminEventListeners();
+                } catch (error) {
+                    console.error('Error adding admin to database:', error);
+                    alert('Admin access granted but failed to save to database. Please contact support.');
+                    userType = 'user';
+                    localStorage.setItem('userType', 'user');
+                    await loadUserProfile(user.uid);
+                    await Promise.all([
+                        fetchWorkoutsForGoal(goalEl.value),
+                        fetchCoachesForGoal(null),
+                        fetchBookings()
+                    ]);
+                }
+            }
+        } else if (userType === 'coach') {
             const coachId = await loadCoachProfile(user.email);
             if (coachId) {
                 // Coach profile exists, load bookings and analytics
@@ -5973,10 +6131,10 @@ onAuthStateChanged(auth, async (user) => {
         showAnalyticsEmpty(); // Clear analytics on logout
         currentUserId = null;
         currentCoachId = null;
-        
+
         // Stop presence tracking
         stopPresenceTracking();
-        
+
         // Clean up listeners on sign out
         if (userBookingsListener) {
             userBookingsListener();
