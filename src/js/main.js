@@ -189,6 +189,7 @@ let currentCoachId = null;
 let notificationsListener = null;
 let bookingsListener = null;
 let userBookingsListener = null; // Separate listener for user bookings
+let allBookingsListener = null; // Listener for all bookings to update coach availability
 
 // Presence tracking variables
 const ONLINE_PRESENCE_INTERVAL = 30000; // 30 seconds
@@ -1801,7 +1802,106 @@ async function fetchWorkoutsForGoal(goal) {
     renderWorkouts(items);
 }
 
-function renderCoaches(items, userGoal, aiRecommendations = null) {
+/**
+ * Check if a coach is currently available or has active bookings
+ * @param {string} coachId - The ID of the coach to check
+ * @returns {Promise<{available: boolean, bookingInfo: string|null, nextAvailableTime: Date|null}>}
+ */
+async function checkCoachAvailability(coachId) {
+    try {
+        // Query for active bookings (pending, confirmed, reviewing, active)
+        const activeBookingsQuery = query(
+            collection(db, "bookings"),
+            where("coachId", "==", coachId),
+            where("status", "in", ["pending", "confirmed", "reviewing", "active"])
+        );
+        
+        const bookingsSnap = await getDocs(activeBookingsQuery);
+        
+        console.log(`🔍 Checking availability for coach ${coachId}: ${bookingsSnap.docs.length} active bookings found`);
+        
+        if (bookingsSnap.empty) {
+            return { available: true, bookingInfo: null, nextAvailableTime: null };
+        }
+        
+        const now = new Date();
+        const currentTime = now.getTime();
+        
+        // Check if any booking is currently active or soon
+        for (const bookingDoc of bookingsSnap.docs) {
+            const booking = bookingDoc.data();
+            
+            // Handle serverTimestamp or null scheduledAt (immediate bookings)
+            let scheduledAt;
+            if (!booking.scheduledAt) {
+                // If no scheduledAt, use createdAt as it's an immediate booking
+                scheduledAt = booking.createdAt?.toDate ? booking.createdAt.toDate() : now;
+            } else if (booking.scheduledAt.toDate) {
+                scheduledAt = booking.scheduledAt.toDate();
+            } else {
+                scheduledAt = new Date(booking.scheduledAt);
+            }
+            
+            const bookingStart = scheduledAt.getTime();
+            const bookingEnd = bookingStart + (60 * 60 * 1000); // 1-hour sessions
+            const bufferMs = 30 * 60 * 1000; // 30-minute buffer
+            
+            console.log(`  📅 Booking ${bookingDoc.id}: scheduled at ${scheduledAt.toLocaleString()}, status: ${booking.status}`);
+            console.log(`  ⏰ Current: ${now.toLocaleString()}, Start: ${new Date(bookingStart - bufferMs).toLocaleString()}, End: ${new Date(bookingEnd + bufferMs).toLocaleString()}`);
+            
+            // Check if booking is currently active or within the buffer period
+            if (currentTime >= (bookingStart - bufferMs) && currentTime <= (bookingEnd + bufferMs)) {
+                console.log(`  ❌ Coach is BUSY - booking overlaps with current time`);
+                return {
+                    available: false,
+                    bookingInfo: `In session until ${new Date(bookingEnd).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
+                    nextAvailableTime: new Date(bookingEnd + bufferMs)
+                };
+            }
+        }
+        
+        // Find the next upcoming booking
+        const futureBookings = bookingsSnap.docs
+            .map(doc => {
+                const booking = doc.data();
+                let scheduledAt;
+                if (!booking.scheduledAt) {
+                    scheduledAt = booking.createdAt?.toDate ? booking.createdAt.toDate() : now;
+                } else if (booking.scheduledAt.toDate) {
+                    scheduledAt = booking.scheduledAt.toDate();
+                } else {
+                    scheduledAt = new Date(booking.scheduledAt);
+                }
+                return {
+                    id: doc.id,
+                    ...booking,
+                    scheduledAt
+                };
+            })
+            .filter(b => b.scheduledAt.getTime() > currentTime)
+            .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime());
+        
+        if (futureBookings.length > 0) {
+            const nextBooking = futureBookings[0];
+            console.log(`  ✅ Coach is available now, next booking at ${nextBooking.scheduledAt.toLocaleString()}`);
+            return {
+                available: true,
+                bookingInfo: `Next booking at ${nextBooking.scheduledAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
+                nextAvailableTime: null
+            };
+        }
+        
+        console.log(`  ✅ Coach is available with no upcoming bookings`);
+        return { available: true, bookingInfo: null, nextAvailableTime: null };
+        
+    } catch (error) {
+        console.warn('❌ Error checking coach availability:', error);
+        // If there's an error, assume available to not block bookings
+        return { available: true, bookingInfo: null, nextAvailableTime: null };
+    }
+}
+
+async function renderCoaches(items, userGoal, aiRecommendations = null) {
     coachList.innerHTML = "";
     if (!items.length) {
         coachEmpty.classList.remove("hidden");
@@ -1817,10 +1917,20 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
         });
     }
     
+    // Check availability for all coaches in parallel
+    const availabilityPromises = items.map(c => checkCoachAvailability(c.id));
+    const availabilityResults = await Promise.all(availabilityPromises);
+    const availabilityMap = new Map();
+    items.forEach((c, index) => {
+        availabilityMap.set(c.id, availabilityResults[index]);
+    });
+    
     for (const c of items) {
         const card = document.createElement("div");
         const aiRec = aiScores.get(c.id);
         const hasAI = !!aiRec;
+        const availability = availabilityMap.get(c.id);
+        const isAvailable = availability.available;
         
         card.className = `rounded-lg border p-4 flex flex-col gap-2 ${hasAI ? 'border-indigo-300 dark:border-indigo-700' : ''}`;
         card.setAttribute('data-coach-id', c.id); // Add data attribute for presence updates
@@ -1860,6 +1970,22 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
             `;
         }
         
+        // Availability badge or button
+        let bookingSection;
+        if (isAvailable) {
+            bookingSection = `<button id="${btnId}" class="rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-white text-sm font-semibold hover:from-purple-500 hover:to-pink-500">Book</button>`;
+        } else {
+            const nextAvailableText = availability.nextAvailableTime 
+                ? `Available: ${new Date(availability.nextAvailableTime).toLocaleString('en-US', { 
+                    month: 'short', 
+                    day: 'numeric', 
+                    hour: 'numeric', 
+                    minute: '2-digit'
+                  })}`
+                : 'Currently Booked';
+            bookingSection = `<span class="rounded-lg bg-gray-400 px-4 py-2 text-white text-sm font-semibold cursor-not-allowed" title="${availability.bookingInfo || 'Coach has an active booking'}">${nextAvailableText}</span>`;
+        }
+        
         card.innerHTML = `
       <div class="flex items-start justify-between">
         <div class="flex flex-col gap-1">
@@ -1875,16 +2001,19 @@ function renderCoaches(items, userGoal, aiRecommendations = null) {
       ${aiSection}
       <div class="flex items-center justify-between mt-2">
         <span class="text-sm text-gray-600">Rate: ${c.hourlyRate ? `₹${c.hourlyRate}/hr` : "On request"}</span>
-        <button id="${btnId}" class="rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-white text-sm font-semibold hover:from-purple-500 hover:to-pink-500">Book</button>
+        ${bookingSection}
       </div>
     `;
         coachList.appendChild(card);
-        const btn = card.querySelector(`#${btnId}`);
-        btn.addEventListener("click", async () => {
-            // Use the user's saved goal from profile, or the filtered goal
-            const bookingGoal = goalEl.value || userGoal || c.specializations?.[0] || 'general_fitness';
-            openBookingModal({ id: c.id, name: c.name }, bookingGoal);
-        });
+        
+        if (isAvailable) {
+            const btn = card.querySelector(`#${btnId}`);
+            btn.addEventListener("click", async () => {
+                // Use the user's saved goal from profile, or the filtered goal
+                const bookingGoal = goalEl.value || userGoal || c.specializations?.[0] || 'general_fitness';
+                openBookingModal({ id: c.id, name: c.name }, bookingGoal);
+            });
+        }
     }
 }
 
@@ -1969,7 +2098,7 @@ async function fetchCoachesForGoal(goal) {
         }
     }
     
-    renderCoaches(items, goal, aiRecommendations);
+    await renderCoaches(items, goal, aiRecommendations);
 }
 
 function renderBookings(items) {
@@ -2218,6 +2347,34 @@ async function fetchBookings() {
         });
     }, (error) => {
         console.error('User bookings listener error:', error);
+    });
+}
+
+/**
+ * Set up real-time listener for all bookings to update coach availability
+ * This refreshes the coach list whenever a booking status changes
+ */
+function setupCoachAvailabilityListener() {
+    // Clean up previous listener
+    if (allBookingsListener) {
+        allBookingsListener();
+    }
+    
+    // Listen to all active bookings
+    const q = query(
+        collection(db, "bookings"),
+        where("status", "in", ["pending", "confirmed", "reviewing", "active"])
+    );
+    
+    allBookingsListener = onSnapshot(q, async (snapshot) => {
+        console.log('📡 Booking status changed, refreshing coach availability...');
+        
+        // Only refresh if we're currently showing coaches
+        if (coachSection && !coachSection.classList.contains('hidden')) {
+            await fetchCoachesForGoal(goalEl?.value || null);
+        }
+    }, (error) => {
+        console.warn('All bookings listener error:', error);
     });
 }
 
@@ -3475,7 +3632,89 @@ function renderClientsNeedingAttention(clients) {
 async function createBooking(coachId, goal, scheduledAt) {
     const user = auth.currentUser;
     if (!user) return;
-    console.log('Creating booking for coachId:', coachId, 'goal:', goal);
+    console.log('Creating booking for coachId:', coachId, 'goal:', goal, 'scheduledAt:', scheduledAt);
+    
+    // Check if coach already has an active booking at this time
+    const now = new Date();
+    const bufferMinutes = 30; // Time buffer around bookings
+    
+    try {
+        console.log('🔍 Checking coach availability...');
+        
+        // Query for existing bookings for this coach that are active/confirmed
+        const existingBookingsQuery = query(
+            collection(db, "bookings"),
+            where("coachId", "==", coachId),
+            where("status", "in", ["pending", "confirmed", "reviewing", "active"])
+        );
+        
+        const existingBookingsSnap = await getDocs(existingBookingsQuery);
+        console.log(`Found ${existingBookingsSnap.docs.length} existing bookings for coach`);
+        
+        // For immediate bookings, use current time. For scheduled, use provided time
+        const requestedTime = scheduledAt ? new Date(scheduledAt) : now;
+        const requestedStart = requestedTime.getTime();
+        const requestedEnd = requestedStart + (60 * 60 * 1000); // 1 hour sessions
+        const bufferMs = bufferMinutes * 60 * 1000;
+        
+        console.log(`📅 Requested booking time: ${requestedTime.toLocaleString()}`);
+        console.log(`📅 Session window: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
+        
+        for (const bookingDoc of existingBookingsSnap.docs) {
+            const booking = bookingDoc.data();
+            
+            // Handle serverTimestamp or regular timestamp
+            let bookingTime;
+            if (!booking.scheduledAt) {
+                // If no scheduledAt, assume it's an immediate booking created recently
+                bookingTime = booking.createdAt?.toDate ? booking.createdAt.toDate() : now;
+            } else if (booking.scheduledAt.toDate) {
+                bookingTime = booking.scheduledAt.toDate();
+            } else {
+                bookingTime = new Date(booking.scheduledAt);
+            }
+            
+            const bookingStart = bookingTime.getTime();
+            const bookingEnd = bookingStart + (60 * 60 * 1000); // 1 hour sessions
+            
+            console.log(`  🔍 Checking against booking ${bookingDoc.id}:`);
+            console.log(`     Existing: ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()} (${booking.status})`);
+            
+            // Check if there's a time conflict (with buffer)
+            const hasConflict = (
+                (requestedStart >= bookingStart - bufferMs && requestedStart < bookingEnd + bufferMs) ||
+                (requestedEnd > bookingStart - bufferMs && requestedEnd <= bookingEnd + bufferMs) ||
+                (requestedStart <= bookingStart && requestedEnd >= bookingEnd)
+            );
+            
+            if (hasConflict) {
+                console.log('❌ TIME CONFLICT DETECTED!');
+                console.log(`   Requested: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
+                console.log(`   Existing:  ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()}`);
+                console.log(`   Overlap detected with booking ${bookingDoc.id}`);
+                
+                const endTime = new Date(bookingEnd);
+                const endTimeStr = endTime.toLocaleString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit',
+                    month: 'short',
+                    day: 'numeric'
+                });
+                
+                // Return null to indicate booking failed due to conflict
+                showToast(`This coach is currently busy and will be available after ${endTimeStr}. Please refresh the coach list.`, 'error');
+                return null;
+            }
+        }
+        
+        console.log('✅ Coach is available for booking');
+    } catch (error) {
+        if (error.message.includes('already booked') || error.message.includes('busy')) {
+            return null; // Return null instead of throwing for availability conflicts
+        }
+        console.warn('⚠️ Could not check availability (index may be missing), proceeding with booking:', error.message);
+        // Continue with booking if availability check fails due to index issues
+    }
     
     const coachSnap = await getDoc(doc(db, "coaches", coachId)).catch(() => null);
     const coachData = coachSnap?.exists?.() ? coachSnap.data() : null;
@@ -3568,6 +3807,179 @@ async function notifyCoach(coachEmail, notificationData) {
     }
 }
 
+// ============================================
+// SESSION REMINDER SYSTEM
+// ============================================
+
+let sessionReminderInterval = null;
+const notifiedBookings = new Set(); // Track which bookings we've already notified about
+
+/**
+ * Start checking for upcoming sessions that need reminders
+ * Checks every minute for sessions starting in 5 minutes
+ */
+function startSessionReminderSystem() {
+    console.log('🔔 Starting session reminder system for coach...');
+    
+    // Stop any existing interval
+    if (sessionReminderInterval) {
+        clearInterval(sessionReminderInterval);
+    }
+    
+    // Check immediately
+    checkUpcomingSessions();
+    
+    // Then check every minute
+    sessionReminderInterval = setInterval(() => {
+        checkUpcomingSessions();
+    }, 60000); // Check every 60 seconds
+}
+
+/**
+ * Stop the session reminder system
+ */
+function stopSessionReminderSystem() {
+    if (sessionReminderInterval) {
+        clearInterval(sessionReminderInterval);
+        sessionReminderInterval = null;
+    }
+    notifiedBookings.clear();
+    console.log('🔕 Session reminder system stopped');
+}
+
+/**
+ * Check for sessions starting in 5 minutes and send reminders
+ */
+async function checkUpcomingSessions() {
+    if (!currentCoachId) return;
+    
+    try {
+        const now = new Date();
+        const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+        const sixMinutesFromNow = new Date(now.getTime() + 6 * 60 * 1000);
+        
+        // Query for confirmed bookings scheduled between 5-6 minutes from now
+        const upcomingQuery = query(
+            collection(db, "bookings"),
+            where("coachId", "==", currentCoachId),
+            where("status", "in", ["confirmed", "pending"])
+        );
+        
+        const snapshot = await getDocs(upcomingQuery);
+        
+        snapshot.docs.forEach(doc => {
+            const booking = { id: doc.id, ...doc.data() };
+            
+            // Skip if already notified
+            if (notifiedBookings.has(booking.id)) {
+                return;
+            }
+            
+            // Get scheduled time
+            let scheduledTime;
+            if (booking.scheduledAt) {
+                scheduledTime = booking.scheduledAt.toDate ? booking.scheduledAt.toDate() : new Date(booking.scheduledAt);
+            } else {
+                return; // Skip if no scheduled time
+            }
+            
+            const timeUntilSession = scheduledTime.getTime() - now.getTime();
+            const minutesUntilSession = Math.floor(timeUntilSession / 60000);
+            
+            // If session starts in 4-6 minutes, send reminder
+            if (minutesUntilSession >= 4 && minutesUntilSession <= 6) {
+                console.log(`⏰ Session starting in ${minutesUntilSession} minutes! Sending reminder...`);
+                sendSessionReminder(booking, scheduledTime);
+                notifiedBookings.add(booking.id);
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error checking upcoming sessions:', error);
+    }
+}
+
+/**
+ * Send reminder to coach about upcoming session
+ * @param {Object} booking - The booking object
+ * @param {Date} scheduledTime - The scheduled time
+ */
+async function sendSessionReminder(booking, scheduledTime) {
+    const timeStr = scheduledTime.toLocaleTimeString('en-US', { 
+        hour: 'numeric', 
+        minute: '2-digit' 
+    });
+    
+    const userName = booking.userName || booking.userEmail || 'User';
+    const goal = booking.goal || 'fitness';
+    
+    // Show browser notification with sound
+    showNotificationWithSound(
+        '⏰ Session Starting Soon!',
+        `Your session with ${userName} (${goal}) starts at ${timeStr}. Time to join!`,
+        'sessionReminder'
+    );
+    
+    // Send email notification through Firestore
+    try {
+        await addDoc(collection(db, "mail"), {
+            to: booking.coachEmail,
+            message: {
+                subject: `⏰ Session Reminder: Starting in 5 minutes`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                        <h2 style="color: #10b981;">🏋️ Session Starting Soon!</h2>
+                        <p style="font-size: 16px; color: #374151;">
+                            Hi Coach,
+                        </p>
+                        <p style="font-size: 16px; color: #374151;">
+                            Your session with <strong>${userName}</strong> is scheduled to start in <strong style="color: #ef4444;">5 minutes</strong>!
+                        </p>
+                        <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                            <p style="margin: 5px 0;"><strong>Client:</strong> ${userName}</p>
+                            <p style="margin: 5px 0;"><strong>Goal:</strong> ${goal}</p>
+                            <p style="margin: 5px 0;"><strong>Time:</strong> ${timeStr}</p>
+                            <p style="margin: 5px 0;"><strong>Meeting Link:</strong> <a href="${booking.meetingLink}" style="color: #3b82f6;">${booking.meetingLink}</a></p>
+                        </div>
+                        <p style="font-size: 16px; color: #374151;">
+                            Please join the session now to ensure you're ready when the client arrives.
+                        </p>
+                        <a href="${booking.meetingLink}" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 10px;">
+                            Join Session Now
+                        </a>
+                        <p style="font-size: 14px; color: #6b7280; margin-top: 20px;">
+                            Find My Fit Coach - Your Fitness Journey Partner
+                        </p>
+                    </div>
+                `
+            }
+        });
+        console.log('📧 Reminder email sent to:', booking.coachEmail);
+    } catch (error) {
+        console.error('Failed to send reminder email:', error);
+    }
+    
+    // Also add to in-app notifications
+    try {
+        await addDoc(collection(db, "notifications"), {
+            recipientEmail: booking.coachEmail,
+            read: false,
+            type: 'session_reminder',
+            bookingId: booking.id,
+            userName: userName,
+            goal: goal,
+            scheduledTime: scheduledTime,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        console.error('Failed to create in-app notification:', error);
+    }
+}
+
+// ============================================
+// END SESSION REMINDER SYSTEM
+// ============================================
+
 async function fetchCoachBookings() {
     const user = auth.currentUser;
     console.log('fetchCoachBookings called, user:', user?.email, 'currentCoachId:', currentCoachId);
@@ -3633,7 +4045,7 @@ function renderCoachCalendar(bookings) {
     // Categorize bookings
     const pendingBookings = bookings.filter(b => b.status === 'pending');
     const confirmedBookings = bookings.filter(b => b.status === 'confirmed');
-    const activeBookings = bookings.filter(b => b.status === 'active');
+    const activeBookings = bookings.filter(b => b.status === 'active' || b.status === 'reviewing');
     const upcomingBookings = bookings.filter(b => {
         if (b.status === 'scheduled' && b.scheduledAt) {
             return b.scheduledAt.toMillis() > now;
@@ -3645,6 +4057,35 @@ function renderCoachCalendar(bookings) {
         b.status === 'cancelled' ||
         (b.scheduledAt && b.scheduledAt.toMillis() < now && b.status === 'scheduled')
     );
+    
+    // Render Active Sessions - HIGHEST PRIORITY
+    if (activeBookings.length > 0) {
+        const activeSection = document.createElement("div");
+        activeSection.className = "mb-8 p-5 bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 rounded-xl border-3 border-emerald-400 shadow-2xl animate-pulse-slow";
+        activeSection.innerHTML = `
+            <div class="mb-4 flex items-center justify-between">
+                <h3 class="text-2xl font-extrabold text-transparent bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text flex items-center gap-3">
+                    <span class="inline-flex items-center justify-center w-8 h-8 bg-emerald-500 rounded-full animate-ping-slow">
+                        <span class="absolute inline-flex h-8 w-8 rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
+                        <span class="relative inline-flex w-6 h-6 bg-emerald-500 rounded-full"></span>
+                    </span>
+                    🟢 ACTIVE SESSION NOW (${activeBookings.length})
+                </h3>
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-bold text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-full border-2 border-emerald-300 animate-bounce">
+                        ⚡ IN PROGRESS
+                    </span>
+                </div>
+            </div>
+            <div id="active-sessions-list" class="space-y-4"></div>
+        `;
+        coachCalendar.appendChild(activeSection);
+        
+        const activeList = activeSection.querySelector("#active-sessions-list");
+        activeBookings.forEach(booking => {
+            activeList.appendChild(createCoachBookingCard(booking, 'active'));
+        });
+    }
     
     // Render Pending Requests - PRIORITY SECTION
     if (pendingBookings.length > 0) {
@@ -3671,23 +4112,22 @@ function renderCoachCalendar(bookings) {
         });
     }
     
-    // Render Confirmed & Active Sessions
-    const activeAndConfirmed = [...confirmedBookings, ...activeBookings];
-    if (activeAndConfirmed.length > 0) {
-        const activeSection = document.createElement("div");
-        activeSection.className = "mb-6";
-        activeSection.innerHTML = `
-            <h3 class="text-lg font-semibold text-emerald-400 mb-3 flex items-center gap-2">
-                <span class="inline-block w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
-                Active Sessions (${activeAndConfirmed.length})
+    // Render Confirmed Sessions (Ready to Join)
+    if (confirmedBookings.length > 0) {
+        const confirmedSection = document.createElement("div");
+        confirmedSection.className = "mb-6";
+        confirmedSection.innerHTML = `
+            <h3 class="text-lg font-semibold text-blue-600 mb-3 flex items-center gap-2">
+                <span class="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                ✓ Confirmed Sessions (${confirmedBookings.length})
             </h3>
-            <div id="active-sessions-list" class="space-y-3"></div>
+            <div id="confirmed-sessions-list" class="space-y-3"></div>
         `;
-        coachCalendar.appendChild(activeSection);
+        coachCalendar.appendChild(confirmedSection);
         
-        const activeList = activeSection.querySelector("#active-sessions-list");
-        activeAndConfirmed.forEach(booking => {
-            activeList.appendChild(createCoachBookingCard(booking, 'active'));
+        const confirmedList = confirmedSection.querySelector("#confirmed-sessions-list");
+        confirmedBookings.forEach(booking => {
+            confirmedList.appendChild(createCoachBookingCard(booking, 'confirmed'));
         });
     }
     
@@ -3808,9 +4248,33 @@ function createCoachBookingCard(booking, category) {
     
     card.className = `rounded-lg border p-4 ${statusStyles[booking.status] || 'border-gray-700'}`;
     
-    const time = booking.scheduledAt 
-        ? new Date(booking.scheduledAt.toMillis()).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-        : 'In Progress';
+    // Format date and time more prominently
+    let dateTimeDisplay = '';
+    if (booking.scheduledAt) {
+        const scheduledDate = new Date(booking.scheduledAt.toMillis());
+        const isToday = new Date().toDateString() === scheduledDate.toDateString();
+        const isTomorrow = new Date(Date.now() + 86400000).toDateString() === scheduledDate.toDateString();
+        
+        let dayLabel = scheduledDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        if (isToday) dayLabel = 'Today';
+        else if (isTomorrow) dayLabel = 'Tomorrow';
+        
+        const timeStr = scheduledDate.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+        
+        // Show prominent time for upcoming/confirmed sessions
+        if (category === 'pending' || category === 'active' || (booking.status === 'confirmed' && !booking.status.includes('completed'))) {
+            dateTimeDisplay = `
+                <div class="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p class="text-xs text-blue-600 font-semibold">📅 ${dayLabel}</p>
+                    <p class="text-lg font-bold text-blue-700">🕐 ${timeStr}</p>
+                </div>
+            `;
+        } else {
+            dateTimeDisplay = `<p class="text-xs text-gray-600 mt-1">🕐 ${timeStr}</p>`;
+        }
+    } else {
+        dateTimeDisplay = '<p class="text-xs text-gray-600 mt-1">🕐 In Progress</p>';
+    }
     
     const confirmBtnId = `confirm-${booking.id}`;
     const endBtnId = `coach-end-${booking.id}`;
@@ -3839,18 +4303,20 @@ function createCoachBookingCard(booking, category) {
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
     
     card.innerHTML = `
-        <div class="flex items-center justify-between">
+        <div class="flex items-start justify-between gap-4">
             <div class="flex-1">
-                <p class="font-medium text-gray-800">${booking.userName || booking.userEmail || 'User'}</p>
-                <p class="text-sm text-gray-600 mt-1">Goal: ${booking.goal}</p>
-                ${booking.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-600 mt-1">🕐 ${time}</p>`}
+                <div class="flex items-center gap-2 mb-1">
+                    <p class="font-semibold text-gray-800">${booking.userName || booking.userEmail || 'User'}</p>
+                    ${statusBadges[booking.status] || ''}
+                </div>
+                <p class="text-sm text-gray-600">Goal: <span class="font-medium">${booking.goal}</span></p>
+                ${booking.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1 font-semibold">⚡ Session in progress</p>' : dateTimeDisplay}
             </div>
-            <div class="flex items-center gap-2">
-                ${statusBadges[booking.status] || ''}
-                ${showConfirmButton ? `<button id="${confirmBtnId}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500">Confirm Booking</button>` : ''}
-                ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${booking.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
-                ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ''}
-                ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100">Delete</button>` : ''}
+            <div class="flex flex-col items-end gap-2">
+                ${showConfirmButton ? `<button id="${confirmBtnId}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 whitespace-nowrap">Confirm Booking</button>` : ''}
+                ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${booking.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2 whitespace-nowrap"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
+                ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20 whitespace-nowrap">End Session</button>` : ''}
+                ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100 whitespace-nowrap">Delete</button>` : ''}
             </div>
         </div>
     `;
@@ -4017,10 +4483,23 @@ bookingConfirmBtn.addEventListener("click", async () => {
         bookingConfirmBtn.textContent = 'Requesting...';
         try {
             console.log('Creating immediate booking...');
-            await createBooking(pendingBookingCoach.id, pendingBookingGoal, null);
+            // Pass current time instead of null for proper availability checking
+            const result = await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date());
+            if (result === null) {
+                // Booking failed due to availability conflict
+                closeBookingModal();
+                await fetchBookings();
+                return;
+            }
             closeBookingModal();
             alert('Booking request sent! Waiting for coach confirmation. You will be notified when the coach accepts.');
             await fetchBookings();
+            // Trigger coach list refresh after a short delay to ensure Firestore has updated
+            setTimeout(() => {
+                if (goalEl && goalEl.value) {
+                    fetchCoachesForGoal(goalEl.value);
+                }
+            }, 1000);
         } catch (e) {
             console.error('Booking error:', e);
             alert('Failed to create booking: ' + e.message);
@@ -4040,11 +4519,15 @@ bookingConfirmBtn.addEventListener("click", async () => {
         bookingConfirmBtn.textContent = 'Requesting...';
         try {
             console.log('Creating scheduled booking...');
-            await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date(selectedMs));
+            const result = await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date(selectedMs));
+            if (result === null) {
+                // Booking failed due to availability conflict
+                closeBookingModal();
+                await fetchBookings();
+                return;
+            }
             closeBookingModal();
             alert('Booking request sent! Waiting for coach confirmation. You will be notified when the coach accepts.');
-            await fetchBookings();
-            closeBookingModal();
             await fetchBookings();
         } catch (e) {
             console.error('Booking error:', e);
@@ -5608,6 +6091,32 @@ const notificationSounds = {
         oscillator.stop(audioContext.currentTime + 0.4);
         
         console.log('✅ Booking confirmed notification sound played');
+    },
+    
+    sessionReminder: () => {
+        // Create urgent reminder sound for sessions starting soon
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Create three beeps for urgency
+        for (let i = 0; i < 3; i++) {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            // Urgent beep sound
+            oscillator.frequency.setValueAtTime(880, audioContext.currentTime + (i * 0.3)); // A5
+            
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime + (i * 0.3));
+            gainNode.gain.linearRampToValueAtTime(0.4, audioContext.currentTime + (i * 0.3) + 0.05);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + (i * 0.3) + 0.2);
+            
+            oscillator.start(audioContext.currentTime + (i * 0.3));
+            oscillator.stop(audioContext.currentTime + (i * 0.3) + 0.2);
+        }
+        
+        console.log('⏰ Session reminder sound played (3 beeps)');
     }
 };
 
@@ -5948,6 +6457,7 @@ onAuthStateChanged(auth, async (user) => {
                 // Coach profile exists, load bookings and analytics
                 currentCoachId = coachId;
                 startPresenceTracking(); // Start tracking coach presence
+                startSessionReminderSystem(); // Start checking for upcoming sessions
                 await Promise.all([
                     fetchCoachBookings(),
                     loadCoachAnalytics()
@@ -5957,6 +6467,7 @@ onAuthStateChanged(auth, async (user) => {
         } else {
             await loadUserProfile(user.uid);
             startCoachPresenceListener(); // Start listening to coach presence for users
+            setupCoachAvailabilityListener(); // Start listening to bookings for coach availability
             // Load ALL coaches for users to see
             await Promise.all([
                 fetchWorkoutsForGoal(goalEl.value),
@@ -5967,7 +6478,7 @@ onAuthStateChanged(auth, async (user) => {
         }
     } else {
         renderWorkouts([]);
-        renderCoaches([], null);
+        await renderCoaches([], null);
         renderBookings([]);
         renderCoachCalendar([]);
         showAnalyticsEmpty(); // Clear analytics on logout
@@ -5976,6 +6487,7 @@ onAuthStateChanged(auth, async (user) => {
         
         // Stop presence tracking
         stopPresenceTracking();
+        stopSessionReminderSystem(); // Stop session reminders
         
         // Clean up listeners on sign out
         if (userBookingsListener) {
@@ -5993,6 +6505,10 @@ onAuthStateChanged(auth, async (user) => {
         if (coachPresenceListener) {
             coachPresenceListener();
             coachPresenceListener = null;
+        }
+        if (allBookingsListener) {
+            allBookingsListener();
+            allBookingsListener = null;
         }
     }
 });
