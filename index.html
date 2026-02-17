@@ -453,6 +453,24 @@
 
         <!-- User App -->
         <section id="app" class="hidden space-y-6">
+            <!-- Logged in indicator -->
+            <div class="bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-6 py-3 rounded-lg shadow-lg flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="bg-white/20 backdrop-blur-sm rounded-full p-2">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium opacity-90">Logged in as</p>
+                        <p class="text-lg font-bold">User</p>
+                    </div>
+                </div>
+                <div class="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-semibold">
+                    Active
+                </div>
+            </div>
+            
             <!-- Profile form (stays outside tabs) -->
             <section id="profile-section"
                 class="hidden rounded-2xl bg-white border border-gray-200 p-6 shadow-lg">
@@ -799,6 +817,24 @@
 
         <!-- Coach App -->
         <section id="coach-app" class="hidden space-y-8">
+            <!-- Logged in indicator -->
+            <div class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="bg-white/20 backdrop-blur-sm rounded-full p-2">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium opacity-90">Logged in as</p>
+                        <p class="text-lg font-bold">Coach</p>
+                    </div>
+                </div>
+                <div class="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-semibold">
+                    Active
+                </div>
+            </div>
+            
             <!-- Coach Profile Setup -->
             <section id="coach-profile-setup" class="hidden rounded-xl border border-gray-200 bg-white p-6 shadow-lg">
                 <h2 class="text-xl font-semibold mb-4 text-gray-900">Complete Your Coach Profile</h2>
