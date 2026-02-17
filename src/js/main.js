@@ -32,7 +32,7 @@ import {
 
 // Load Firebase configuration from a local, untracked file
 // Note: Increment version number after config changes to bust cache
-import { firebaseConfig, openaiApiKey } from "../../config/config.js?v=2";
+import { firebaseConfig, geminiApiKey, openaiApiKey } from "../../config/config.js?v=4";
 import { AIService } from "../ai/ai-service.js";
 
 // Initialize Firebase services
@@ -40,12 +40,11 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Initialize AI Service
-const aiService = new AIService(openaiApiKey);
+// Initialize AI Service — tries Gemini first, falls back to OpenAI
+const aiService = new AIService({ geminiApiKey, openaiApiKey });
 console.log('🤖 AI Service initialized:', {
-    hasApiKey: !!openaiApiKey,
-    apiKeyLength: openaiApiKey?.length || 0,
-    apiKeyPreview: openaiApiKey ? openaiApiKey.substring(0, 10) + '...' : 'None'
+    hasGeminiKey: !!geminiApiKey,
+    hasOpenAIKey: !!openaiApiKey
 });
 
 // UI elements
@@ -4723,9 +4722,9 @@ generateWorkoutBtn.addEventListener("click", async () => {
         });
 
         if (error.message.includes('429') || error.message.includes('quota') || error.message.includes('exceeded')) {
-            alert('⚠️ OpenAI API quota exceeded.\n\nYour OpenAI account has run out of credits.\n\nOptions:\n1. Add billing at https://platform.openai.com/account/billing\n2. Create a new OpenAI account with $5 free credits\n3. Continue using the app without AI features\n\nThe rest of the app still works!');
-        } else if (error.message.includes('API request failed')) {
-            alert('OpenAI API Error: ' + error.message + '\n\nPlease check:\n1. Your API key is correct\n2. Your OpenAI account has credits\n3. Visit https://platform.openai.com/account/billing');
+            alert('⚠️ AI API quota exceeded.\n\nThe AI service has reached its usage limit.\n\nPlease try again later or contact the administrator.\nThe rest of the app still works!');
+        } else if (error.message.includes('AI request failed') || error.message.includes('AI service')) {
+            alert('AI Service Error: ' + error.message + '\n\nPlease check:\n1. You are signed in\n2. The AI service is configured on the server\n3. Try refreshing the page');
         } else {
             alert('Failed to generate workout: ' + (error.message || 'Unknown error') + '\n\nCheck browser console (F12) for details.');
         }

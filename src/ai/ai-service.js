@@ -1,14 +1,21 @@
 /**
- * AI Service for FindMyFitCoach - Google Gemini Version
- * Uses Google's Gemini API for AI-powered workout generation
+ * AI Service for FindMyFitCoach
+ *
+ * Provider-agnostic interface that tries Gemini first, then OpenAI as fallback.
+ * API keys are read from config/config.js (deployed via Firebase Hosting,
+ * but kept out of git via .gitignore).
  */
 
 export class AIService {
-    constructor(apiKey) {
-        this.apiKey = apiKey;
-        // Updated to use gemini-1.5-flash (fast and free tier friendly)
-        this.apiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+    constructor({ geminiApiKey, openaiApiKey } = {}) {
+        this.geminiApiKey = geminiApiKey || '';
+        this.openaiApiKey = openaiApiKey || '';
+        this.geminiEndpoint =
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+        this.openaiEndpoint = 'https://api.openai.com/v1/chat/completions';
     }
+
+    // ─── Public methods ────────────────────────────────────────
 
     /**
      * Generate personalized workout considering recent workout history
@@ -16,16 +23,10 @@ export class AIService {
     async generatePersonalizedWorkoutWithHistory(userProfile, recentWorkouts = []) {
         console.log('🏋️ generatePersonalizedWorkoutWithHistory called:', {
             userProfile: userProfile.goal || 'no goal',
-            recentWorkoutsCount: recentWorkouts.length,
-            hasAPIKey: !!this.apiKey
+            recentWorkoutsCount: recentWorkouts.length
         });
 
-        if (!this.apiKey) {
-            console.warn('❌ No Gemini API key found - returning fallback');
-            return this.getFallbackWorkout(userProfile);
-        }
-
-        const dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][new Date().getDay()];
+        const dayOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()];
         const timeOfDay = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening';
 
         const prompt = `You are an experienced fitness coach. Generate a personalized workout plan.
@@ -51,7 +52,7 @@ Examples:
 Return ONLY a valid JSON array of strings, no markdown or other formatting.`;
 
         try {
-            const response = await this._callGemini(prompt);
+            const response = await this._callAI(prompt);
             return this._parseWorkoutResponse(response);
         } catch (error) {
             console.error('❌ AI Workout Error:', error);
@@ -64,7 +65,7 @@ Return ONLY a valid JSON array of strings, no markdown or other formatting.`;
      */
     async generateCoachingInsights({ prompt, userProfile, workoutHistory, sessionGoal }) {
         try {
-            const response = await this._callGemini(prompt);
+            const response = await this._callAI(prompt);
             return response.replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
         } catch (error) {
             console.error('AI Coaching Insights Error:', error);
@@ -85,7 +86,7 @@ Generate 5-7 exercises as a JSON array of strings.
 Return ONLY a valid JSON array.`;
 
         try {
-            const response = await this._callGemini(prompt);
+            const response = await this._callAI(prompt);
             return this._parseWorkoutResponse(response);
         } catch (error) {
             console.error('Error:', error);
@@ -98,14 +99,14 @@ Return ONLY a valid JSON array.`;
      */
     async generateWorkoutPlan(userProfile, customPrompt = null) {
         const prompt = customPrompt || `Generate a workout for: ${userProfile.goal || 'fitness'}
-        
+
 Height: ${userProfile.heightCm || 170}cm
 Weight: ${userProfile.weightKg || 70}kg
 
 Return 5-7 exercises as a JSON array of strings only.`;
 
         try {
-            const response = await this._callGemini(prompt);
+            const response = await this._callAI(prompt);
             return this._parseWorkoutResponse(response);
         } catch (error) {
             console.error('Error:', error);
@@ -114,24 +115,94 @@ Return 5-7 exercises as a JSON array of strings only.`;
     }
 
     /**
-     * Call Google Gemini API
+     * Generate coach recommendations for a user (match scoring)
      */
-    async _callGemini(prompt) {
-        console.log('🌐 Gemini API Call Starting...');
+    async generateCoachRecommendations(userProfile, coaches) {
+        if (!coaches || coaches.length === 0) return [];
 
-        const url = `${this.apiEndpoint}?key=${this.apiKey}`;
+        const coachList = coaches.map(c => ({
+            id: c.id,
+            name: c.displayName || c.name || 'Coach',
+            specialties: c.specialties || [],
+            bio: c.bio || '',
+            experience: c.experience || ''
+        }));
+
+        const prompt = `You are a fitness matching expert. Score how well each coach matches this user.
+
+User Profile:
+- Goal: ${userProfile.goal || 'general fitness'}
+- Height: ${userProfile.heightCm || 170}cm
+- Weight: ${userProfile.weightKg || 70}kg
+- Requirements: ${userProfile.requirements || 'None'}
+
+Available Coaches:
+${coachList.map((c, i) => `${i + 1}. ${c.name} — Specialties: ${c.specialties.join(', ') || 'General'} — Bio: ${c.bio.substring(0, 100)}`).join('\n')}
+
+Return a JSON array of objects with "coachId" (string) and "matchScore" (number 0-100).
+Example: [{"coachId": "abc123", "matchScore": 85}]
+Return ONLY the JSON array.`;
+
+        try {
+            const response = await this._callAI(prompt);
+            const cleanJson = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const parsed = JSON.parse(cleanJson);
+
+            if (Array.isArray(parsed)) {
+                return parsed.map(item => ({
+                    coachId: item.coachId,
+                    matchScore: Math.min(100, Math.max(0, Number(item.matchScore) || 50))
+                }));
+            }
+            return [];
+        } catch (error) {
+            console.warn('AI coach matching failed (non-critical):', error.message);
+            return [];
+        }
+    }
+
+    // ─── Private: provider-agnostic dispatch ───────────────────
+
+    /**
+     * Try Gemini first, fall back to OpenAI.
+     * Throws only if BOTH providers fail (or no keys are configured).
+     */
+    async _callAI(prompt) {
+        if (!this.geminiApiKey && !this.openaiApiKey) {
+            console.warn('⚠️ No AI API keys configured — returning fallback');
+            throw new Error('No AI API key configured. Add a key in config/config.js');
+        }
+
+        // Attempt 1 — Gemini
+        if (this.geminiApiKey) {
+            try {
+                return await this._callGemini(prompt);
+            } catch (geminiError) {
+                console.warn('⚠️ Gemini failed, trying OpenAI fallback:', geminiError.message);
+                if (!this.openaiApiKey) throw geminiError;
+            }
+        }
+
+        // Attempt 2 — OpenAI (fallback)
+        if (this.openaiApiKey) {
+            return await this._callOpenAI(prompt);
+        }
+
+        throw new Error('All AI providers failed');
+    }
+
+    // ─── Private: Gemini ───────────────────────────────────────
+
+    async _callGemini(prompt) {
+        console.log('🌐 Calling Gemini API...');
+
+        const url = `${this.geminiEndpoint}?key=${this.geminiApiKey}`;
 
         const response = await fetch(url, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: prompt
-                    }]
-                }],
+                contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
                     temperature: 0.7,
                     maxOutputTokens: 2048
@@ -141,45 +212,56 @@ Return 5-7 exercises as a JSON array of strings only.`;
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            console.error('❌ Gemini API error:', {
-                status: response.status,
-                statusText: response.statusText,
-                errorData,
-                url: this.apiEndpoint,
-                hasApiKey: !!this.apiKey
-            });
-
-            // Provide helpful error messages
-            if (response.status === 400) {
-                throw new Error('Invalid API request. Please check your API key.');
-            } else if (response.status === 403) {
-                throw new Error('API key is invalid or does not have permission to use Gemini API.');
-            } else if (response.status === 404) {
-                throw new Error('Gemini API endpoint not found. The model may have been updated.');
-            } else if (response.status === 429) {
-                throw new Error('API quota exceeded. Please try again later.');
-            }
-
-            throw new Error(`API request failed: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
+            throw new Error(`Gemini ${response.status}: ${errorData.error?.message || response.statusText}`);
         }
 
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) {
-            throw new Error('No response from AI');
-        }
+        if (!text) throw new Error('Empty Gemini response');
 
         console.log('✅ Gemini response received');
         return text;
     }
 
-    /**
-     * Parse workout response
-     */
+    // ─── Private: OpenAI ───────────────────────────────────────
+
+    async _callOpenAI(prompt) {
+        console.log('🌐 Calling OpenAI API...');
+
+        const response = await fetch(this.openaiEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.openaiApiKey}`
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: 'You are an experienced fitness coach. Respond concisely and helpfully.' },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.7,
+                max_tokens: 2048
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenAI ${response.status}: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content;
+        if (!text) throw new Error('Empty OpenAI response');
+
+        console.log('✅ OpenAI response received');
+        return text;
+    }
+
+    // ─── Response parsing ──────────────────────────────────────
+
     _parseWorkoutResponse(response) {
         try {
-            // Remove markdown code blocks
             const cleanJson = response
                 .replace(/```json\n?/g, '')
                 .replace(/```\n?/g, '')
@@ -187,19 +269,12 @@ Return 5-7 exercises as a JSON array of strings only.`;
 
             const parsed = JSON.parse(cleanJson);
 
-            if (Array.isArray(parsed)) {
-                return parsed;
-            }
-
-            // Handle object with exercises array
-            if (parsed.exercises && Array.isArray(parsed.exercises)) {
-                return parsed.exercises;
-            }
+            if (Array.isArray(parsed)) return parsed;
+            if (parsed.exercises && Array.isArray(parsed.exercises)) return parsed.exercises;
 
             throw new Error('Invalid format');
         } catch (error) {
             console.error('Parse error:', error);
-            // Return fallback if parsing fails
             return [
                 'Warm-up: Light cardio and stretching (5 minutes)',
                 'Bodyweight squats: 3 sets of 12 reps',
@@ -211,9 +286,8 @@ Return 5-7 exercises as a JSON array of strings only.`;
         }
     }
 
-    /**
-     * Get fallback workout
-     */
+    // ─── Fallbacks (no AI needed) ──────────────────────────────
+
     getFallbackWorkout(userProfile) {
         const goal = userProfile?.goal?.toLowerCase() || 'general fitness';
 
@@ -250,9 +324,6 @@ Return 5-7 exercises as a JSON array of strings only.`;
         return workouts[goal] || workouts['general fitness'];
     }
 
-    /**
-     * Get fallback coaching insights
-     */
     getFallbackInsights(sessionGoal, workoutHistory) {
         return `<div class="space-y-3">
 <div><strong>🎯 Session Focus</strong><br>
@@ -270,12 +341,8 @@ Return 5-7 exercises as a JSON array of strings only.`;
 </div>`;
     }
 
-    /**
-     * Calculate fitness level
-     */
     _calculateFitnessLevel(userProfile) {
         const bmi = userProfile.weightKg / Math.pow(userProfile.heightCm / 100, 2);
-
         if (bmi < 18.5) return 'beginner';
         if (bmi < 25) return 'intermediate';
         if (bmi < 30) return 'beginner';
