@@ -89,7 +89,8 @@ const userMenu = document.getElementById("user-menu");
 const userDisplayEl = document.getElementById("user-display");
 const userDisplayName = document.getElementById("user-display-name");
 const userDropdown = document.getElementById("user-dropdown");
-const btnSignIn = document.getElementById("btn-sign-in");
+const btnSignInUser = document.getElementById("btn-sign-in-user");
+const btnSignInCoach = document.getElementById("btn-sign-in-coach");
 const btnSignOut = document.getElementById("btn-sign-out");
 const landingHero = document.getElementById("landing-hero");
 const gateEl = document.getElementById("auth-gate");
@@ -1483,7 +1484,8 @@ function toggleAuthUI(user) {
         gateEl.classList.remove("hidden");
         appEl.classList.add("hidden");
         coachAppEl.classList.add("hidden");
-        btnSignIn.classList.remove("hidden");
+        btnSignInUser.classList.remove("hidden");
+        btnSignInCoach.classList.remove("hidden");
         btnSignOut.classList.add("hidden");
         userMenu.classList.add("hidden");
         coachMenu.classList.add("hidden");
@@ -1499,7 +1501,8 @@ function toggleAuthUI(user) {
             console.error('🔴 landingHero element not found!');
         }
         gateEl.classList.add("hidden");
-        btnSignIn.classList.add("hidden");
+        btnSignInUser.classList.add("hidden");
+        btnSignInCoach.classList.add("hidden");
         btnSignOut.classList.remove("hidden");
         
         // Show appropriate view based on user type
@@ -1843,7 +1846,21 @@ async function checkCoachAvailability(coachId) {
             }
             
             const bookingStart = scheduledAt.getTime();
-            const bookingEnd = bookingStart + (60 * 60 * 1000); // 1-hour sessions
+            let bookingEnd = bookingStart + (60 * 60 * 1000); // 1-hour sessions
+            
+            // If session has been ended manually, use the actual end time
+            if (booking.endedAt) {
+                const endedAt = booking.endedAt.toDate ? booking.endedAt.toDate() : new Date(booking.endedAt);
+                bookingEnd = endedAt.getTime();
+                console.log(`  ✅ Session was ended manually at ${endedAt.toLocaleString()}`);
+                
+                // If ended in the past, skip this booking (coach is available)
+                if (currentTime > bookingEnd) {
+                    console.log(`  ✅ Session ended - coach is now available`);
+                    continue;
+                }
+            }
+            
             const bufferMs = 30 * 60 * 1000; // 30-minute buffer
             
             console.log(`  📅 Booking ${bookingDoc.id}: scheduled at ${scheduledAt.toLocaleString()}, status: ${booking.status}`);
@@ -2914,10 +2931,10 @@ function renderTopCoaches(topCoaches) {
                 <span class="text-lg w-6">${medal || `${index + 1}.`}</span>
                 <div class="flex-1">
                     <div class="flex items-center justify-between mb-1">
-                        <span class="text-sm text-white font-medium">${coach.name}</span>
-                        <span class="text-xs text-cyan-400">${coach.count} sessions</span>
+                        <span class="text-sm text-gray-800 font-medium">${coach.name}</span>
+                        <span class="text-xs text-blue-600">${coach.count} sessions</span>
                     </div>
-                    <div class="w-full bg-gray-700/50 rounded-full h-2">
+                    <div class="w-full bg-gray-200 rounded-full h-2">
                         <div class="h-2 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-500" style="width: ${barWidth}%"></div>
                     </div>
                 </div>
@@ -2949,8 +2966,8 @@ function renderGoalProgress(goalProgress) {
                 <div class="flex items-center gap-2">
                     <span class="text-2xl">${goalProgress.icon || '🎯'}</span>
                     <div>
-                        <h4 class="font-semibold text-white">${goalProgress.goal}</h4>
-                        <p class="text-xs text-gray-400">${goalProgress.current || 0} / ${goalProgress.target || '?'} activities</p>
+                        <h4 class="font-semibold text-gray-800">${goalProgress.goal}</h4>
+                        <p class="text-xs text-gray-600">${goalProgress.current || 0} / ${goalProgress.target || '?'} activities</p>
                     </div>
                 </div>
                 <div class="text-right">
@@ -2959,7 +2976,7 @@ function renderGoalProgress(goalProgress) {
             </div>
             
             <div class="relative">
-                <div class="w-full bg-gray-700/50 rounded-full h-4 ${colors.ring} ring-2">
+                <div class="w-full bg-gray-200 rounded-full h-4 ${colors.ring} ring-2">
                     <div class="h-4 rounded-full bg-gradient-to-r ${colors.bg} transition-all duration-700 ease-out" 
                          style="width: ${goalProgress.progress}%"></div>
                 </div>
@@ -3022,10 +3039,10 @@ function renderActivitySummary(recentActivity, streak, totalAiWorkouts) {
                             <p class="text-xs text-gray-600">${a.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                         </div>
                         <span class="text-xs px-2 py-1 rounded ${
-                            a.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
-                            a.status === 'cancelled' ? 'bg-red-500/20 text-red-400' :
-                            a.status === 'generated' ? 'bg-purple-500/20 text-purple-400' :
-                            'bg-blue-500/20 text-blue-400'
+                            a.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                            a.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                            a.status === 'generated' ? 'bg-purple-100 text-purple-700' :
+                            'bg-blue-100 text-blue-700'
                         }">${a.status}</span>
                     </div>
                 `).join('')}
@@ -4657,6 +4674,27 @@ window.addEventListener('DOMContentLoaded', () => {
     if (btnChangeType) {
         btnChangeType.addEventListener("click", hideLoginOptions);
     }
+    
+    // Sign-in button handlers
+    if (btnSignInUser) {
+        btnSignInUser.addEventListener("click", () => {
+            console.log('Sign in as User button clicked');
+            landingHero.classList.add("hidden");
+            gateEl.classList.remove("hidden");
+            gateEl.scrollIntoView({ behavior: 'smooth' });
+            showLoginOptions('user');
+        });
+    }
+    
+    if (btnSignInCoach) {
+        btnSignInCoach.addEventListener("click", () => {
+            console.log('Sign in as Coach button clicked');
+            landingHero.classList.add("hidden");
+            gateEl.classList.remove("hidden");
+            gateEl.scrollIntoView({ behavior: 'smooth' });
+            showLoginOptions('coach');
+        });
+    }
 });
 
 // Auth method tabs
@@ -5731,10 +5769,11 @@ generateWorkoutBtn.addEventListener("click", async () => {
         
         // Save workout to history for immediate future variation
         try {
+            const exercisesData = Array.isArray(workout) ? workout : (workout?.exercises || []);
             await addDoc(collection(db, 'ai_workouts'), {
                 userId: user.uid,
                 workout: {
-                    exercises: workout,
+                    exercises: exercisesData,
                     generatedAt: new Date(),
                     userProfile: {
                         goal: userProfile.goal,
@@ -5775,34 +5814,68 @@ function renderAIWorkout(workout) {
     aiWorkoutEmpty.classList.add('hidden');
     aiWorkoutContainer.classList.remove('hidden');
     
-    const exercisesList = workout.exercises.map((ex, index) => `
-        <div class="border-l-4 border-indigo-500 pl-3 py-2">
-            <label class="flex items-start gap-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded transition-colors">
-                <input type="checkbox" class="mt-1 w-5 h-5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500" id="exercise-${index}">
-                <div class="flex-1">
-                    <h4 class="font-semibold text-gray-900 dark:text-gray-100">${ex.name}</h4>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">
-                        ${ex.checklistItem || `${ex.sets ? `${ex.sets} sets` : ''} ${ex.reps ? `× ${ex.reps} reps` : ''} ${ex.duration ? `• ${ex.duration}` : ''}`}
-                    </p>
-                    ${ex.notes ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">💡 ${ex.notes}</p>` : ''}
+    // Handle both array format and object format
+    const exercises = Array.isArray(workout) ? workout : (workout?.exercises || []);
+    if (exercises.length === 0) {
+        console.error('No exercises found in workout:', workout);
+        alert('Workout generation failed - no exercises received. Please try again.');
+        aiWorkoutEmpty.classList.remove('hidden');
+        aiWorkoutContainer.classList.add('hidden');
+        return;
+    }
+    
+    const exercisesList = exercises.map((ex, index) => {
+        // Handle both string format and object format
+        if (typeof ex === 'string') {
+            return `
+                <div class="border-l-4 border-indigo-500 pl-3 py-2">
+                    <label class="flex items-start gap-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded transition-colors">
+                        <input type="checkbox" class="mt-1 w-5 h-5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500" id="exercise-${index}">
+                        <div class="flex-1">
+                            <p class="text-sm text-gray-900 dark:text-gray-100">${ex}</p>
+                        </div>
+                    </label>
                 </div>
-            </label>
-        </div>
-    `).join('');
+            `;
+        }
+        // Object format
+        return `
+            <div class="border-l-4 border-indigo-500 pl-3 py-2">
+                <label class="flex items-start gap-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded transition-colors">
+                    <input type="checkbox" class="mt-1 w-5 h-5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500" id="exercise-${index}">
+                    <div class="flex-1">
+                        <h4 class="font-semibold text-gray-900 dark:text-gray-100">${ex.name || ex}</h4>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">
+                            ${ex.checklistItem || `${ex.sets ? `${ex.sets} sets` : ''} ${ex.reps ? `× ${ex.reps} reps` : ''} ${ex.duration ? `• ${ex.duration}` : ''}`}
+                        </p>
+                        ${ex.notes ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">💡 ${ex.notes}</p>` : ''}
+                    </div>
+                </label>
+            </div>
+        `;
+    }).join('');
     
-    const warmupItems = workout.warmup?.checklistItems?.map((item, index) => 
-        `<label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="warmup-${index}">
-            <span class="text-sm">${item}</span>
-        </label>`
-    ).join('') || `<p class="text-sm">${workout.warmup?.description || workout.warmup}</p>`;
+    // Only show warmup/cooldown if they exist
+    const hasWarmup = workout.warmup && (workout.warmup.checklistItems || workout.warmup.description || typeof workout.warmup === 'string');
+    const hasCooldown = workout.cooldown && (workout.cooldown.checklistItems || workout.cooldown.description || typeof workout.cooldown === 'string');
     
-    const cooldownItems = workout.cooldown?.checklistItems?.map((item, index) => 
-        `<label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="cooldown-${index}">
-            <span class="text-sm">${item}</span>
-        </label>`
-    ).join('') || `<p class="text-sm">${workout.cooldown?.description || workout.cooldown}</p>`;
+    const warmupItems = hasWarmup ? (
+        workout.warmup?.checklistItems?.map((item, index) => 
+            `<label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="warmup-${index}">
+                <span class="text-sm">${item}</span>
+            </label>`
+        ).join('') || `<p class="text-sm">${workout.warmup?.description || workout.warmup}</p>`
+    ) : '';
+    
+    const cooldownItems = hasCooldown ? (
+        workout.cooldown?.checklistItems?.map((item, index) => 
+            `<label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" class="w-4 h-4 text-indigo-600 rounded" id="cooldown-${index}">
+                <span class="text-sm">${item}</span>
+            </label>`
+        ).join('') || `<p class="text-sm">${workout.cooldown?.description || workout.cooldown}</p>`
+    ) : '';
     
     const equipmentBadges = workout.equipmentNeeded?.map(eq => 
         `<span class="inline-block bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 px-2 py-1 rounded text-xs">${eq}</span>`
@@ -5812,17 +5885,17 @@ function renderAIWorkout(workout) {
         <div class="space-y-4">
             <div class="flex items-start justify-between">
                 <div>
-                    <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100">${workout.title}</h3>
+                    <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100">${workout.title || 'Personalized Workout'}</h3>
                     <div class="flex gap-2 mt-2 text-sm">
-                        <span class="bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 px-3 py-1 rounded-full font-medium">
+                        ${workout.intensity ? `<span class="bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 px-3 py-1 rounded-full font-medium">
                             ${workout.intensity} intensity
-                        </span>
-                        <span class="bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-3 py-1 rounded-full font-medium">
+                        </span>` : ''}
+                        ${workout.duration ? `<span class="bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-3 py-1 rounded-full font-medium">
                             ${workout.duration} mins
-                        </span>
-                        <span class="bg-pink-100 dark:bg-pink-900 text-pink-800 dark:text-pink-200 px-3 py-1 rounded-full font-medium">
+                        </span>` : ''}
+                        ${workout.estimatedCalories ? `<span class="bg-pink-100 dark:bg-pink-900 text-pink-800 dark:text-pink-200 px-3 py-1 rounded-full font-medium">
                             ~${workout.estimatedCalories} cal
-                        </span>
+                        </span>` : ''}
                     </div>
                 </div>
             </div>
@@ -5839,6 +5912,7 @@ function renderAIWorkout(workout) {
                 </div>
             ` : ''}
             
+            ${hasWarmup ? `
             <div>
                 <h4 class="font-semibold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                     🔥 Warm-up (5 mins)
@@ -5848,6 +5922,7 @@ function renderAIWorkout(workout) {
                     ${warmupItems}
                 </div>
             </div>
+            ` : ''}
             
             <div>
                 <h4 class="font-semibold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
@@ -5859,6 +5934,7 @@ function renderAIWorkout(workout) {
                 </div>
             </div>
             
+            ${hasCooldown ? `
             <div>
                 <h4 class="font-semibold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                     🧘 Cool-down (5 mins)
@@ -5868,6 +5944,7 @@ function renderAIWorkout(workout) {
                     ${cooldownItems}
                 </div>
             </div>
+            ` : ''}
             
             <div>
                 <h4 class="font-semibold text-gray-900 dark:text-gray-100 mb-2">🎯 Equipment Needed</h4>
@@ -6512,3 +6589,76 @@ onAuthStateChanged(auth, async (user) => {
         }
     }
 });
+// ============================================
+// TAB NAVIGATION FOR USER PAGE
+// ============================================
+
+// Tab switching functionality
+const tabButtons = {
+    'tab-workouts': 'content-workouts',
+    'tab-coaches': 'content-coaches',
+    'tab-bookings': 'content-bookings',
+    'tab-analytics': 'content-analytics'
+};
+
+// Add click handlers to tab buttons
+Object.keys(tabButtons).forEach(tabId => {
+    const button = document.getElementById(tabId);
+    if (button) {
+        button.addEventListener('click', () => switchTab(tabId));
+    }
+});
+
+function switchTab(activeTabId) {
+    // Update button styles
+    Object.keys(tabButtons).forEach(tabId => {
+        const button = document.getElementById(tabId);
+        const content = document.getElementById(tabButtons[tabId]);
+        
+        if (tabId === activeTabId) {
+            // Active tab style
+            button.className = 'tab-btn flex-1 min-w-[120px] px-4 py-3 rounded-lg text-sm font-semibold transition-all duration-200 bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-md';
+            content.classList.remove('hidden');
+        } else {
+            // Inactive tab style
+            button.className = 'tab-btn flex-1 min-w-[120px] px-4 py-3 rounded-lg text-sm font-semibold transition-all duration-200 text-gray-700 hover:bg-gray-100';
+            content.classList.add('hidden');
+        }
+    });
+}
+
+// ============================================
+// TAB NAVIGATION FOR COACH PAGE
+// ============================================
+
+// Coach tab switching functionality
+const coachTabButtons = {
+    'coach-tab-schedule': 'coach-content-schedule',
+    'coach-tab-analytics': 'coach-content-analytics'
+};
+
+// Add click handlers to coach tab buttons
+Object.keys(coachTabButtons).forEach(tabId => {
+    const button = document.getElementById(tabId);
+    if (button) {
+        button.addEventListener('click', () => switchCoachTab(tabId));
+    }
+});
+
+function switchCoachTab(activeTabId) {
+    // Update button styles
+    Object.keys(coachTabButtons).forEach(tabId => {
+        const button = document.getElementById(tabId);
+        const content = document.getElementById(coachTabButtons[tabId]);
+        
+        if (tabId === activeTabId) {
+            // Active tab style
+            button.className = 'tab-button flex-1 min-w-[120px] rounded-lg px-4 py-2.5 text-sm font-semibold transition-all duration-200 bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-md';
+            content.classList.remove('hidden');
+        } else {
+            // Inactive tab style
+            button.className = 'tab-button flex-1 min-w-[120px] rounded-lg px-4 py-2.5 text-sm font-semibold transition-all duration-200 text-gray-700 hover:bg-gray-100';
+            content.classList.add('hidden');
+        }
+    });
+}

@@ -260,9 +260,7 @@ Return ONLY a JSON array of strings, no other text or markdown.`;
         console.log('🏋️ generatePersonalizedWorkoutWithHistory called:', {
             userProfile: userProfile.goal || 'no goal',
             recentWorkoutsCount: recentWorkouts.length,
-            recentWorkouts: recentWorkouts.slice(0, 2), // First 2 for debugging
-            hasAPIKey: !!this.apiKey,
-            apiKeyLength: this.apiKey ? this.apiKey.length : 0
+            hasAPIKey: !!this.apiKey
         });
         
         // Check API key first
@@ -270,108 +268,46 @@ Return ONLY a JSON array of strings, no other text or markdown.`;
             console.warn('❌ No OpenAI API key found - returning fallback');
             return this.getRandomFallbackWorkout();
         }
-        // Extract exercises from recent workouts to avoid repetition
-        const recentExercises = recentWorkouts
-            .flatMap(w => {
-                // Handle both ai_workouts format and workoutSessions format
-                if (w.exercises) {
-                    return Array.isArray(w.exercises) ? w.exercises : [w.exercises];
-                }
-                if (w.workout && w.workout.exercises) {
-                    return Array.isArray(w.workout.exercises) ? w.workout.exercises : [w.workout.exercises];
-                }
-                return [];
-            })
-            .map(ex => (typeof ex === 'string' ? ex : ex.name || ex.exercise || ex.description || ''))
-            .filter(ex => ex.length > 0)
-            .join(' ')
-            .toLowerCase();
-            
-        console.log('🔍 Recent exercises to avoid:', recentExercises.substring(0, 100) + '...');
-            
-        const dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][new Date().getDay()];
-        const timeOfDay = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening';
-        const variationSeed = Math.floor(Math.random() * 1000);
-        
-        const prompt = `You are an experienced fitness coach designing a progressive workout plan.
 
-🎲 UNIQUE SESSION: ${Date.now()}-${Math.random().toString(36).substring(2)}
-⚡ FORCE CREATIVITY: Generate a completely different workout structure
+        const dayOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()];
+        const timeOfDay = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening';
+        
+        // Build recent workout context
+        const recentContext = recentWorkouts.length > 0 
+            ? `Recent Workouts (avoid repetition):\n${recentWorkouts.slice(0, 2).map((w, i) => {
+                const exercises = w.exercises || w.workout?.exercises || [];
+                return `Session ${i + 1}: ${Array.isArray(exercises) ? exercises.slice(0, 3).join(', ') : exercises}`;
+            }).join('\n')}`
+            : 'No recent workout history';
+        
+        const prompt = `You are an expert fitness coach. Create a personalized workout plan.
 
 User Profile:
-- Height: ${userProfile.heightCm || 170}cm (${userProfile.heightCm ? 'actual' : 'average'})
-- Weight: ${userProfile.weightKg || 70}kg (${userProfile.weightKg ? 'actual' : 'average'})
-- Primary Goal: ${userProfile.goal || 'general fitness'}
-- Requirements/Constraints: ${userProfile.requirements || 'None'}
+- Goal: ${userProfile.goal || 'general fitness'}
 - Fitness Level: ${this._calculateFitnessLevel(userProfile)}
-- Session: ${timeOfDay} ${dayOfWeek}
-- Variation ID: ${variationSeed}
-- Timestamp: ${Date.now()}
-- Random Factor: ${Math.random().toFixed(3)}
+- Session Time: ${timeOfDay}, ${dayOfWeek}
 
-RECENT WORKOUT HISTORY (avoid exact repetition):
-${recentWorkouts.length > 0 ? 
-    recentWorkouts.map((w, i) => {
-        const exercises = w.exercises || w.workout?.exercises || [];
-        const exerciseList = Array.isArray(exercises) ? exercises.join(', ') : exercises;
-        return `Previous Workout ${i + 1}: ${exerciseList}`;
-    }).join('\n') :
-    'No recent workouts found'
+${recentContext}
+
+Create a varied workout with 5-7 clear, actionable exercises. Include warm-up, main exercises, and cool-down.
+Format each as: "Exercise name: sets × reps or duration"
+
+Example format:
+{
+  "exercises": [
+    "Dynamic warm-up: Arm circles and leg swings (4 minutes)",
+    "Bodyweight squats: 3 sets of 10 reps",
+    "Push-ups: 2 sets of 8 reps",
+    "Plank hold: 2 sets of 30 seconds",
+    "Cool-down stretches: Full body (5 minutes)"
+  ]
 }
 
-SPECIFIC EXERCISES TO AVOID:
-${recentExercises.length > 10 ? 
-    'Recent exercises: ' + recentExercises.substring(0, 200) + '...' : 
-    'No recent exercise history available'
-}
-
-COACHING GUIDELINES:
-• Design a balanced workout with proper progression
-• Vary exercises from recent sessions while maintaining effectiveness  
-• Include appropriate warm-up, main work, and cool-down phases
-• Use proven exercise techniques with clear instructions
-• Adjust intensity based on user's fitness level and goals
-• Ensure exercises are safe for home environment
-• Session timing: ${timeOfDay} - adjust intensity accordingly
-• MANDATORY: Create a unique workout structure, NOT the generic 7-exercise pattern
-
-GENERATE A DIFFERENT WORKOUT STRUCTURE:
-Instead of the banned pattern above, use alternatives like:
-✅ "Dynamic warm-up: Arm circles and leg swings (4 minutes)"
-✅ "Circuit training: 3 rounds of bodyweight exercises (15 minutes)" 
-✅ "Core strengthening: Dead bug exercise 2 sets of 8 each side"
-✅ "Upper body: Wall push-ups 2 sets of 10 reps"
-✅ "Lower body: Step-ups on sturdy surface 2 sets of 12 each leg"
-✅ "Active recovery: Walking in place with arm movements (5 minutes)"
-✅ "Flexibility focus: Targeted stretches for worked muscles (4 minutes)"
-• MANDATORY: Create a unique workout structure, NOT the generic 7-exercise pattern
-
-GENERATE A DIFFERENT WORKOUT STRUCTURE:
-Instead of the banned pattern above, use alternatives like:
-✅ "Dynamic warm-up: Arm circles and leg swings (4 minutes)"
-✅ "Circuit training: 3 rounds of bodyweight exercises (15 minutes)" 
-✅ "Core strengthening: Dead bug exercise 2 sets of 8 each side"
-✅ "Upper body: Wall push-ups 2 sets of 10 reps"
-✅ "Lower body: Step-ups on sturdy surface 2 sets of 12 each leg"
-✅ "Active recovery: Walking in place with arm movements (5 minutes)"
-✅ "Flexibility focus: Targeted stretches for worked muscles (4 minutes)"
-
-Generate exactly 5-7 professional exercises as a JSON array of strings.
-IMPORTANT: Each response MUST be different. Use this unique identifier: ${Date.now()}-${Math.random()}
-
-Instead of the banned exercises above, create variations like:
-✅ "Movement preparation: Joint circles and gentle stretches (4 minutes)"
-✅ "Strength circuit: 3 exercises, 45s work/15s rest, 2 rounds"
-✅ "Core training: Bird dog holds 2 sets of 30 seconds each side"
-✅ "Upper body: Incline push-ups against wall 2 sets of 8 reps"
-✅ "Leg strengthening: Chair-supported squats 2 sets of 10 reps"
-✅ "Active cool-down: Gentle walking with arm swings (5 minutes)"
-
-Return exactly 5-7 exercises as a JSON array of strings. MAKE IT UNIQUE!`;
+Return ONLY valid JSON with an "exercises" array.`;
 
         try {
-            console.log('📝 Full workout prompt being sent to AI:', prompt.substring(0, 500) + '...');
-            const response = await this._callOpenAI(prompt, 'gpt-4o-mini', 1.2, 400);
+            console.log('📝 Sending workout request to OpenAI...');
+            const response = await this._callOpenAI(prompt, 'gpt-4o-mini', 0.7, 800);
             console.log('🔄 Raw AI response:', response);
             const cleanJson = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             console.log('🧹 Cleaned JSON:', cleanJson);
@@ -379,21 +315,40 @@ Return exactly 5-7 exercises as a JSON array of strings. MAKE IT UNIQUE!`;
             
             console.log('🎯 Workout generation successful:', {
                 isArray: Array.isArray(parsed),
-                exerciseCount: parsed?.length || 0,
-                exercises: parsed
+                hasExercises: !!parsed.exercises,
+                exerciseCount: (parsed.exercises || parsed)?.length || 0,
+                data: parsed
             });
             
-            return Array.isArray(parsed) ? parsed : [];
+            // Handle both array format and object with exercises property
+            const exercises = parsed.exercises || (Array.isArray(parsed) ? parsed : null);
+            
+            if (exercises && Array.isArray(exercises) && exercises.length > 0) {
+                return exercises;
+            }
+            
+            if (exercises && Array.isArray(exercises) && exercises.length > 0) {
+                return exercises;
+            }
+            
+            console.warn('⚠️ AI returned invalid format:', { parsed, exercises });
+            throw new Error('AI returned invalid workout format');
         } catch (error) {
             console.error('❌ AI Workout with History Error:', {
                 errorMessage: error.message,
                 errorType: error.name,
                 isJSONError: error.message.includes('JSON'),
                 isNetworkError: error.message.includes('fetch') || error.message.includes('network'),
-                isAPIError: error.message.includes('API'),
+                isAPIError: error.message.includes('API') || error.message.includes('401') || error.message.includes('429'),
                 fullError: error.toString(),
                 stack: error.stack?.split('\n').slice(0, 3)
             });
+            
+            // Check if it's an API authentication issue
+            if (error.message.includes('401') || error.message.includes('API key')) {
+                console.error('🔑 API Key Issue Detected - Check your OpenAI API key in config.js');
+            }
+            
             console.log('🔄 Using fallback workout due to error above...');
             // Return professional coaching plans based on goal (AVOID REPETITIVE PATTERN)
             const goalBasedDefaults = {
@@ -412,11 +367,37 @@ Return exactly 5-7 exercises as a JSON array of strings. MAKE IT UNIQUE!`;
                     'Core stability: Modified side planks 2 sets of 15 seconds each',
                     'Functional training: Single-leg stands 2 sets of 30 seconds each',
                     'Flexibility session: Full body stretches and mobility (5 minutes)'
+                ],
+                'general fitness': [
+                    'Warm-up routine: Arm swings and leg movements (4 minutes)',
+                    'Cardio interval: High knees and jumping jacks (8 minutes)',
+                    'Bodyweight strength: Push-ups 2 sets of 8 reps',
+                    'Lower body: Lunges 2 sets of 10 each leg',
+                    'Core work: Plank holds 2 sets of 20 seconds',
+                    'Stretching routine: Full body flexibility (5 minutes)'
+                ],
+                'endurance': [
+                    'Light cardio: March in place (3 minutes)',
+                    'Endurance circuit: Step-ups and arm raises (12 minutes)',
+                    'Active recovery: Walking with arm movements (5 minutes)',
+                    'Lower body: Calf raises 3 sets of 15 reps',
+                    'Core training: Bicycle crunches 2 sets of 12 reps',
+                    'Cool-down stretches: Legs and back (5 minutes)'
+                ],
+                'flexibility': [
+                    'Gentle movement: Joint circles (3 minutes)',
+                    'Dynamic stretching: Leg swings and arm rotations (6 minutes)',
+                    'Yoga flow: Cat-cow and child pose (8 minutes)',
+                    'Hip mobility: Hip circles and stretches (5 minutes)',
+                    'Shoulder flexibility: Arm stretches and rotations (4 minutes)',
+                    'Relaxation: Deep breathing and final stretches (4 minutes)'
                 ]
             };
             
             const goal = userProfile.goal?.toLowerCase() || 'general fitness';
-            return goalBasedDefaults[goal] || goalBasedDefaults['weight loss'];
+            const fallbackWorkout = goalBasedDefaults[goal] || goalBasedDefaults['general fitness'];
+            console.log('✅ Returning fallback workout:', { goal, exerciseCount: fallbackWorkout.length });
+            return fallbackWorkout;
         }
     }
 
@@ -573,8 +554,21 @@ ${workoutHistory.length > 0 ?
                 console.error('❌ OpenAI API error:', {
                     status: response.status,
                     statusText: response.statusText,
-                    errorData
+                    errorData,
+                    errorMessage: errorData.error?.message,
+                    errorType: errorData.error?.type,
+                    errorCode: errorData.error?.code
                 });
+                
+                // Provide more helpful error messages
+                if (response.status === 401) {
+                    throw new Error('API Authentication Failed: Invalid or expired API key. Please check your OpenAI API key in config.js');
+                } else if (response.status === 429) {
+                    throw new Error('API Rate Limit: Too many requests or insufficient quota. Please check your OpenAI account.');
+                } else if (response.status === 400) {
+                    throw new Error(`API Bad Request: ${errorData.error?.message || 'Invalid request format'}`);
+                }
+                
                 throw new Error(`API request failed: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
             }
 
