@@ -249,6 +249,18 @@ const joinModalGoal = document.getElementById("join-modal-goal");
 const joinModalTime = document.getElementById("join-modal-time");
 let pendingJoinBooking = null;
 
+// Feedback modal elements
+const feedbackModal = document.getElementById("feedback-modal");
+const starRatingContainer = document.getElementById("star-rating");
+const starButtons = document.querySelectorAll(".star-btn");
+const ratingText = document.getElementById("rating-text");
+const feedbackOtherName = document.getElementById("feedback-other-name");
+const feedbackNotes = document.getElementById("feedback-notes");
+const submitFeedbackBtn = document.getElementById("submit-feedback-btn");
+const skipFeedbackBtn = document.getElementById("skip-feedback-btn");
+let currentFeedbackBooking = null;
+let selectedRating = 0;
+
 // Global variables for current review session
 let currentReviewBooking = null;
 let savedAIAnalysis = null; // Store AI analysis for workout generation
@@ -585,6 +597,55 @@ joinSessionBtn?.addEventListener("click", async () => {
 dismissJoinModalBtn?.addEventListener("click", () => {
     sessionJoinModal?.classList.add('hidden');
     pendingJoinBooking = null;
+});
+
+// Feedback modal event listeners
+skipFeedbackBtn?.addEventListener("click", () => {
+    closeFeedbackModal();
+});
+
+submitFeedbackBtn?.addEventListener("click", async () => {
+    await submitFeedback();
+});
+
+// Star rating interaction
+document.querySelectorAll('.star-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const rating = parseInt(this.getAttribute('data-rating'));
+        selectedRating = rating;
+        
+        // Update visual state
+        document.querySelectorAll('.star-btn').forEach((star, index) => {
+            if (index < rating) {
+                star.classList.remove('text-gray-300');
+                star.classList.add('text-yellow-400');
+            } else {
+                star.classList.remove('text-yellow-400');
+                star.classList.add('text-gray-300');
+            }
+        });
+        
+        // Update text and enable submit button
+        const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+        ratingText.textContent = ratingLabels[rating];
+        submitFeedbackBtn.disabled = false;
+    });
+    
+    // Hover effect
+    btn.addEventListener('mouseenter', function() {
+        const rating = parseInt(this.getAttribute('data-rating'));
+        document.querySelectorAll('.star-btn').forEach((star, index) => {
+            if (index < rating) {
+                star.style.transform = 'scale(1.1)';
+            }
+        });
+    });
+    
+    btn.addEventListener('mouseleave', function() {
+        document.querySelectorAll('.star-btn').forEach(star => {
+            star.style.transform = 'scale(1)';
+        });
+    });
 });
 
 saveNotesBtn?.addEventListener("click", async () => {
@@ -1970,6 +2031,36 @@ async function checkCoachAvailability(coachId) {
     }
 }
 
+async function getCoachRating(coachId) {
+    try {
+        const feedbackQuery = query(
+            collection(db, 'feedback'),
+            where('coachId', '==', coachId),
+            where('ratingFor', '==', 'coach')
+        );
+        
+        const snapshot = await getDocs(feedbackQuery);
+        
+        if (snapshot.empty) {
+            return { avgRating: 0, totalRatings: 0 };
+        }
+        
+        let totalRating = 0;
+        snapshot.forEach(doc => {
+            totalRating += doc.data().rating;
+        });
+        
+        const avgRating = totalRating / snapshot.size;
+        return { 
+            avgRating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
+            totalRatings: snapshot.size 
+        };
+    } catch (error) {
+        console.error('Error fetching coach rating:', error);
+        return { avgRating: 0, totalRatings: 0 };
+    }
+}
+
 async function renderCoaches(items, userGoal, aiRecommendations = null) {
     coachList.innerHTML = "";
     if (!items.length) {
@@ -1988,10 +2079,14 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
     
     // Check availability for all coaches in parallel
     const availabilityPromises = items.map(c => checkCoachAvailability(c.id));
+    const ratingPromises = items.map(c => getCoachRating(c.id));
     const availabilityResults = await Promise.all(availabilityPromises);
+    const ratingResults = await Promise.all(ratingPromises);
     const availabilityMap = new Map();
+    const ratingMap = new Map();
     items.forEach((c, index) => {
         availabilityMap.set(c.id, availabilityResults[index]);
+        ratingMap.set(c.id, ratingResults[index]);
     });
     
     for (const c of items) {
@@ -2000,6 +2095,7 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
         const hasAI = !!aiRec;
         const availability = availabilityMap.get(c.id);
         const isAvailable = availability.available;
+        const rating = ratingMap.get(c.id);
         
         card.className = `rounded-lg border p-4 flex flex-col gap-2 ${hasAI ? 'border-indigo-300 dark:border-indigo-700' : ''}`;
         card.setAttribute('data-coach-id', c.id); // Add data attribute for presence updates
@@ -2021,6 +2117,26 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
             // Offline
             presenceClass = 'bg-gray-400';
             presenceTitle = getLastSeenText(c.lastSeen);
+        }
+        
+        // Rating display
+        let ratingSection = '';
+        if (rating.totalRatings > 0) {
+            const fullStars = Math.floor(rating.avgRating);
+            const hasHalfStar = rating.avgRating % 1 >= 0.5;
+            let starsHtml = '';
+            for (let i = 0; i < 5; i++) {
+                if (i < fullStars) {
+                    starsHtml += '<span class="text-yellow-400">★</span>';
+                } else if (i === fullStars && hasHalfStar) {
+                    starsHtml += '<span class="text-yellow-400">⯨</span>';
+                } else {
+                    starsHtml += '<span class="text-gray-300">★</span>';
+                }
+            }
+            ratingSection = `<div class="flex items-center gap-1 text-sm">${starsHtml}<span class="text-gray-600 ml-1">${rating.avgRating} (${rating.totalRatings})</span></div>`;
+        } else {
+            ratingSection = `<div class="flex items-center gap-1 text-sm text-gray-500 italic">No ratings yet - Be the first to rate!</div>`;
         }
         
         let aiSection = '';
@@ -2067,6 +2183,7 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
             <h3 class="font-semibold">${c.name}</h3>
             <div class="presence-indicator w-2 h-2 rounded-full ${presenceClass}" title="${presenceTitle}"></div>
           </div>
+          ${ratingSection}
           <p class="text-sm text-gray-600">${c.yearsExperience ?? 0} yrs experience</p>
         </div>
         <span class="rounded bg-blue-100 border border-blue-300 px-2 py-1 text-xs text-blue-700">${(c.specializations ?? []).join(", ")}</span>
@@ -2383,11 +2500,23 @@ function createBookingCard(b, isActive) {
             ? '<span class="text-purple-600">⏳ Waiting for coach to accept...</span>' 
             : (b.coachId || 'Unknown Coach');
     
+    // Feedback/rating display for completed sessions
+    let feedbackSection = '';
+    if (b.status === 'completed') {
+        const feedbackGiven = userType === 'coach' ? b.coachFeedbackGiven : b.userFeedbackGiven;
+        if (feedbackGiven) {
+            feedbackSection = '<span class="text-xs text-gray-500 italic">✓ Feedback submitted</span>';
+        } else {
+            feedbackSection = '<span class="text-xs text-amber-600 italic">⚠ Feedback pending</span>';
+        }
+    }
+    
     row.innerHTML = `
       <div class="flex-1">
         <p class="font-medium text-gray-900">${coachDisplay}</p>
         <p class="text-sm text-gray-600 mt-1">Goal: ${b.goal}</p>
         ${b.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-600 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>`}
+        ${feedbackSection}
       </div>
       <div class="flex items-center gap-3">
         ${statusBadges[b.status] || ''}
@@ -4969,11 +5098,112 @@ async function deleteBooking(bookingId) {
 async function endSession(bookingId) {
     const user = auth.currentUser;
     if (!user) return;
+    
+    // Get booking data before ending
     const bookingRef = doc(db, "bookings", bookingId);
+    const bookingSnap = await getDoc(bookingRef);
+    
+    if (!bookingSnap.exists()) {
+        console.error('Booking not found');
+        return;
+    }
+    
+    const bookingData = bookingSnap.data();
+    
+    // Update booking status to completed
     await updateDoc(bookingRef, { 
         status: "completed",
         endedAt: serverTimestamp()
     });
+    
+    // Show feedback modal
+    showFeedbackModal(bookingId, bookingData);
+}
+
+// Feedback modal functions
+function showFeedbackModal(bookingId, bookingData) {
+    currentFeedbackBooking = { id: bookingId, ...bookingData };
+    selectedRating = 0;
+    
+    // Determine who to show feedback for
+    const otherPersonName = userType === 'coach' 
+        ? (bookingData.userName || bookingData.userEmail || 'the user')
+        : (bookingData.coachName || 'the coach');
+    
+    feedbackOtherName.textContent = otherPersonName;
+    feedbackNotes.value = '';
+    
+    // Reset stars
+    document.querySelectorAll('.star-btn').forEach(btn => {
+        btn.classList.remove('text-yellow-400');
+        btn.classList.add('text-gray-300');
+    });
+    
+    submitFeedbackBtn.disabled = true;
+    ratingText.textContent = 'Click to rate';
+    
+    feedbackModal.classList.remove('hidden');
+}
+
+function closeFeedbackModal() {
+    feedbackModal.classList.add('hidden');
+    currentFeedbackBooking = null;
+    selectedRating = 0;
+}
+
+async function submitFeedback() {
+    if (!currentFeedbackBooking || selectedRating === 0) return;
+    
+    const user = auth.currentUser;
+    if (!user) return;
+    
+    submitFeedbackBtn.disabled = true;
+    submitFeedbackBtn.textContent = 'Submitting...';
+    
+    try {
+        const feedbackData = {
+            bookingId: currentFeedbackBooking.id,
+            rating: selectedRating,
+            notes: feedbackNotes.value.trim() || null,
+            submittedAt: serverTimestamp(),
+            submittedBy: user.uid,
+            submitterType: userType
+        };
+        
+        // Add feedback for coach rating
+        if (userType === 'user') {
+            feedbackData.coachId = currentFeedbackBooking.coachId;
+            feedbackData.userId = user.uid;
+            feedbackData.ratingFor = 'coach';
+        } else {
+            feedbackData.coachId = currentFeedbackBooking.coachId;
+            feedbackData.userId = currentFeedbackBooking.userId;
+            feedbackData.ratingFor = 'user';
+        }
+        
+        // Save feedback to Firestore
+        await addDoc(collection(db, 'feedback'), feedbackData);
+        
+        // Update booking with feedback flag
+        const bookingRef = doc(db, 'bookings', currentFeedbackBooking.id);
+        const updateData = userType === 'coach' 
+            ? { coachFeedbackGiven: true }
+            : { userFeedbackGiven: true };
+        await updateDoc(bookingRef, updateData);
+        
+        closeFeedbackModal();
+        alert('Thank you for your feedback!');
+        
+        // Refresh coach list if user is viewing coaches (to update availability)
+        if (userType === 'user' && coachSection && !coachSection.classList.contains('hidden')) {
+            await fetchCoachesForGoal(goalEl?.value || null);
+        }
+    } catch (error) {
+        console.error('Error submitting feedback:', error);
+        alert('Failed to submit feedback. Please try again.');
+        submitFeedbackBtn.disabled = false;
+        submitFeedbackBtn.textContent = 'Submit Feedback';
+    }
 }
 
 // Modal event handlers
@@ -6593,30 +6823,29 @@ function updateCoachPresenceUI(coachData) {
 }
 
 function isCoachOnline(coachData) {
-    // If presence fields don't exist, check if coach was recently created (assume online if created within last 5 minutes)
+    // If presence fields don't exist, default to true (assume online) to allow bookings
+    // This handles the case where coaches haven't set up presence tracking yet or just logged in
     if (!coachData.hasOwnProperty('isOnline') || !coachData.hasOwnProperty('lastSeen')) {
-        // Check if coach was recently created (within last 5 minutes)
-        if (coachData.createdAt) {
-            const now = new Date();
-            const createdAt = coachData.createdAt.toDate ? coachData.createdAt.toDate() : new Date(coachData.createdAt);
-            const timeSinceCreation = now - createdAt;
-            // If coach was created within last 5 minutes, assume they're online
-            if (timeSinceCreation < 300000) { // 5 minutes
-                return true;
-            }
-        }
-        // Otherwise, return false (offline) instead of null
-        return false;
+        return true; // Default to online to allow bookings
     }
     
-    if (!coachData.isOnline) return false;
     if (!coachData.lastSeen) return false;
     
     const now = new Date();
     const lastSeen = coachData.lastSeen.toDate ? coachData.lastSeen.toDate() : new Date(coachData.lastSeen);
     const timeDiff = now - lastSeen;
     
-    return timeDiff < OFFLINE_TIMEOUT;
+    // Check if last seen is recent (within OFFLINE_TIMEOUT)
+    const isRecentlyActive = timeDiff < OFFLINE_TIMEOUT;
+    
+    // If coach was recently active (within timeout), consider them online even if isOnline flag is false
+    // This handles the case where presence hasn't updated yet after login
+    if (isRecentlyActive) {
+        return true;
+    }
+    
+    // Otherwise, rely on the isOnline flag
+    return coachData.isOnline === true;
 }
 
 function getLastSeenText(lastSeen) {
