@@ -4229,11 +4229,11 @@ async function checkUpcomingSessions() {
             }
             
             const timeUntilSession = scheduledTime.getTime() - now.getTime();
-            const minutesUntilSession = Math.floor(timeUntilSession / 60000);
+            const minutesUntilSession = timeUntilSession / 60000;
             
-            // If session starts in 4-6 minutes, send reminder
-            if (minutesUntilSession >= 4 && minutesUntilSession <= 6) {
-                console.log(`⏰ Session starting in ${minutesUntilSession} minutes! Sending reminder...`);
+            // If session starts in 4-5 minutes, send reminder (accounting for 60s check interval)
+            if (minutesUntilSession >= 4 && minutesUntilSession <= 5) {
+                console.log(`⏰ Session starting in ${Math.floor(minutesUntilSession)} minutes! Sending reminder...`);
                 sendSessionReminder(booking, scheduledTime);
                 notifiedBookings.add(booking.id);
             }
@@ -4361,11 +4361,11 @@ async function checkUpcomingUserSessions() {
             }
             
             const timeUntilSession = scheduledTime.getTime() - now.getTime();
-            const minutesUntilSession = Math.floor(timeUntilSession / 60000);
+            const minutesUntilSession = timeUntilSession / 60000;
             
-            // If session starts in 4-6 minutes, send reminder
-            if (minutesUntilSession >= 4 && minutesUntilSession <= 6) {
-                console.log(`⏰ User session starting in ${minutesUntilSession} minutes! Sending reminder...`);
+            // If session starts in 4-5 minutes, send reminder (accounting for 60s check interval)
+            if (minutesUntilSession >= 4 && minutesUntilSession <= 5) {
+                console.log(`⏰ User session starting in ${Math.floor(minutesUntilSession)} minutes! Sending reminder...`);
                 sendUserSessionReminder(booking, scheduledTime);
                 notifiedUserBookings.add(booking.id);
             }
@@ -4595,7 +4595,7 @@ function renderCoachCalendar(bookings) {
                         <span class="absolute inline-flex h-8 w-8 rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
                         <span class="relative inline-flex w-6 h-6 bg-emerald-500 rounded-full"></span>
                     </span>
-                    🟢 ACTIVE SESSION NOW (${activeBookings.length})
+                    ACTIVE SESSION NOW (${activeBookings.length})
                 </h3>
                 <div class="flex items-center gap-2">
                     <span class="text-sm font-bold text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-full border-2 border-emerald-300 animate-bounce">
@@ -4822,10 +4822,10 @@ function createCoachBookingCard(booking, category) {
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
     
     const showConfirmButton = booking.status === 'pending' && category !== 'past';
-    // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
-    const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active' || booking.status === 'reviewing') && booking.meetingLink && category !== 'past' && canJoinYet;
-    // Show End button only if time has arrived (canJoinYet) and status is confirmed/reviewing/active
-    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'reviewing' || booking.status === 'active') && canJoinYet;
+    // Show Join button if confirmed OR active OR reviewing, has link, and (time has arrived OR session is already active)
+    const showJoinButton = (booking.status === 'confirmed' || booking.status === 'active' || booking.status === 'reviewing') && booking.meetingLink && category !== 'past' && (canJoinYet || booking.status === 'active');
+    // Show End button if time has arrived (canJoinYet) OR session is active, and status is confirmed/reviewing/active
+    const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'reviewing' || booking.status === 'active') && (canJoinYet || booking.status === 'active');
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
     
     // Add broadcast indicator
@@ -4839,17 +4839,17 @@ function createCoachBookingCard(booking, category) {
                 <div class="flex items-center gap-2 mb-1 flex-wrap">
                     <p class="font-semibold text-gray-800">${booking.userName || booking.userEmail || 'User'}</p>
                     ${broadcastBadge}
-                    ${statusBadges[booking.status] || ''}
+                    ${booking.status !== 'active' ? (statusBadges[booking.status] || '') : ''}
                 </div>
                 <p class="text-sm text-gray-600">Goal: <span class="font-medium">${booking.goal}</span></p>
                 ${booking.isBroadcast ? '<p class="text-xs text-purple-600 mt-1 italic">🌐 This request was sent to all coaches</p>' : ''}
                 ${booking.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1 font-semibold">⚡ Session in progress</p>' : dateTimeDisplay}
             </div>
             <div class="flex flex-col items-end gap-2">
-                ${showConfirmButton ? `<button id="${confirmBtnId}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 whitespace-nowrap">Confirm Booking</button>` : ''}
-                ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${booking.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2 whitespace-nowrap"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
-                ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20 whitespace-nowrap">End Session</button>` : ''}
-                ${showDeleteButton ? `<button id="${deleteBtnId}" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100 whitespace-nowrap">Delete</button>` : ''}
+                ${showConfirmButton ? '<button id="' + confirmBtnId + '" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 whitespace-nowrap">Confirm Booking</button>' : ''}
+                ${showJoinButton ? '<button id="' + joinBtnId + '" data-meeting-link="' + booking.meetingLink + '" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2 whitespace-nowrap"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>' : ''}
+                ${showEndButton ? '<button id="' + endBtnId + '" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20 whitespace-nowrap">End Session</button>' : ''}
+                ${showDeleteButton ? '<button id="' + deleteBtnId + '" class="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-gray-600 text-xs font-medium hover:bg-gray-100 whitespace-nowrap">Delete</button>' : ''}
             </div>
         </div>
     `;
@@ -6593,9 +6593,20 @@ function updateCoachPresenceUI(coachData) {
 }
 
 function isCoachOnline(coachData) {
-    // If presence fields don't exist, return null (unknown status)
+    // If presence fields don't exist, check if coach was recently created (assume online if created within last 5 minutes)
     if (!coachData.hasOwnProperty('isOnline') || !coachData.hasOwnProperty('lastSeen')) {
-        return null;
+        // Check if coach was recently created (within last 5 minutes)
+        if (coachData.createdAt) {
+            const now = new Date();
+            const createdAt = coachData.createdAt.toDate ? coachData.createdAt.toDate() : new Date(coachData.createdAt);
+            const timeSinceCreation = now - createdAt;
+            // If coach was created within last 5 minutes, assume they're online
+            if (timeSinceCreation < 300000) { // 5 minutes
+                return true;
+            }
+        }
+        // Otherwise, return false (offline) instead of null
+        return false;
     }
     
     if (!coachData.isOnline) return false;
