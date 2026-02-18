@@ -191,6 +191,7 @@ let notificationsListener = null;
 let bookingsListener = null;
 let userBookingsListener = null; // Separate listener for user bookings
 let allBookingsListener = null; // Listener for all bookings to update coach availability
+let broadcastBookingsListener = null; // Listener for broadcast booking requests
 
 // Presence tracking variables
 const ONLINE_PRESENCE_INTERVAL = 30000; // 30 seconds
@@ -204,20 +205,23 @@ const aiWorkoutContainer = document.getElementById("ai-workout-container");
 const aiWorkoutContent = document.getElementById("ai-workout-content");
 const aiWorkoutEmpty = document.getElementById("ai-workout-empty");
 
-// Booking modal elements
+// Booking modal elements (for immediate booking with specific coach)
 const bookingModal = document.getElementById("booking-modal");
 const bookingModalCoach = document.getElementById("booking-modal-coach");
-const bookingDatetime = document.getElementById("booking-datetime");
-const bookingDatetimeContainer = document.getElementById("booking-datetime-container");
-const bookingDatetimeError = document.getElementById("booking-datetime-error");
 const bookingCancelBtn = document.getElementById("booking-cancel-btn");
 const bookingConfirmBtn = document.getElementById("booking-confirm-btn");
-const bookingNowBtn = document.getElementById("booking-now-btn");
-const bookingLaterBtn = document.getElementById("booking-later-btn");
+
+// Schedule ahead modal elements (broadcast to all coaches)
+const scheduleAheadModal = document.getElementById("schedule-ahead-modal");
+const scheduleGoal = document.getElementById("schedule-goal");
+const scheduleDatetime = document.getElementById("schedule-datetime");
+const scheduleDatetimeError = document.getElementById("schedule-datetime-error");
+const scheduleCancelBtn = document.getElementById("schedule-cancel-btn");
+const scheduleConfirmBtn = document.getElementById("schedule-confirm-btn");
+const btnScheduleAhead = document.getElementById("btn-schedule-ahead");
 
 let pendingBookingCoach = null; // { id, name }
 let pendingBookingGoal = null;
-let isBookingNow = true; // Track if user wants to start now or book for later
 
 // Video call elements
 const videoCallModal = document.getElementById("video-call-modal");
@@ -235,6 +239,15 @@ const saveNotesBtn = document.getElementById("save-notes-btn");
 const coachSessionNotes = document.getElementById("coach-session-notes");
 const aiAnalysisLoading = document.getElementById("ai-analysis-loading");
 const aiAnalysisContent = document.getElementById("ai-analysis-content");
+
+// Session join reminder modal elements
+const sessionJoinModal = document.getElementById("session-join-modal");
+const joinSessionBtn = document.getElementById("join-session-btn");
+const dismissJoinModalBtn = document.getElementById("dismiss-join-modal-btn");
+const joinModalClientName = document.getElementById("join-modal-client-name");
+const joinModalGoal = document.getElementById("join-modal-goal");
+const joinModalTime = document.getElementById("join-modal-time");
+let pendingJoinBooking = null;
 
 // Global variables for current review session
 let currentReviewBooking = null;
@@ -257,15 +270,6 @@ function openBookingModal(coach, goal) {
     pendingBookingCoach = coach;
     pendingBookingGoal = goal;
     bookingModalCoach.textContent = `Coach: ${coach.name ?? coach.id}`;
-    bookingDatetime.value = "";
-    bookingDatetimeError.classList.add("hidden");
-    bookingDatetimeContainer.classList.add("hidden");
-    isBookingNow = true;
-    
-    // Reset button styles
-    bookingNowBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
-    bookingLaterBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
-    
     bookingModal.classList.remove("hidden");
 }
 
@@ -273,7 +277,19 @@ function closeBookingModal() {
     bookingModal.classList.add("hidden");
     pendingBookingCoach = null;
     pendingBookingGoal = null;
-    isBookingNow = true;
+}
+
+function openScheduleAheadModal() {
+    scheduleGoal.value = "";
+    scheduleDatetime.value = "";
+    scheduleDatetimeError.classList.add("hidden");
+    scheduleAheadModal.classList.remove("hidden");
+}
+
+function closeScheduleAheadModal() {
+    scheduleAheadModal.classList.add("hidden");
+    scheduleGoal.value = "";
+    scheduleDatetime.value = "";
 }
 
 function startEmbeddedVideoCall(bookingId, roomName, title, isModerator = false) {
@@ -533,6 +549,42 @@ completeReviewBtn?.addEventListener("click", async () => {
         completeReviewBtn.disabled = false;
         completeReviewBtn.innerHTML = 'Complete Review & Join Session';
     }
+});
+
+// Session join modal event listeners
+joinSessionBtn?.addEventListener("click", async () => {
+    if (!pendingJoinBooking) return;
+    
+    // Hide the modal
+    sessionJoinModal?.classList.add('hidden');
+    
+    // Start the session
+    const roomName = pendingJoinBooking.meetingId || pendingJoinBooking.meetingLink.split('/').pop().split('#')[0];
+    
+    // Determine if this is coach or user based on userType
+    const isCoach = userType === 'coach';
+    const title = isCoach 
+        ? `Session with ${pendingJoinBooking.userName || 'User'}` 
+        : `Session with ${pendingJoinBooking.coachName || 'Coach'}`;
+    
+    // Update booking status to active and join
+    try {
+        await updateDoc(doc(db, 'bookings', pendingJoinBooking.id), {
+            status: 'active',
+            joinedAt: serverTimestamp()
+        });
+        
+        startEmbeddedVideoCall(pendingJoinBooking.id, roomName, title, isCoach);
+        pendingJoinBooking = null;
+    } catch (error) {
+        console.error('Error joining session:', error);
+        alert('Failed to join session: ' + error.message);
+    }
+});
+
+dismissJoinModalBtn?.addEventListener("click", () => {
+    sessionJoinModal?.classList.add('hidden');
+    pendingJoinBooking = null;
 });
 
 saveNotesBtn?.addEventListener("click", async () => {
@@ -1650,9 +1702,9 @@ function listenForNotifications(coachEmail) {
     notificationsListener = onSnapshot(q, (snapshot) => {
         console.log('Notification snapshot received, changes:', snapshot.docChanges().length);
         snapshot.docChanges().forEach((change) => {
-            console.log('Notification change type:', change.type, 'data:', change.data());
+            console.log('Notification change type:', change.type, 'data:', change.doc.data());
             if (change.type === "added") {
-                const notification = change.data();
+                const notification = change.doc.data();
                 showNotificationToast(notification);
                 // Mark as read
                 updateDoc(doc(db, "notifications", change.doc.id), { read: true });
@@ -1987,11 +2039,13 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
             `;
         }
         
-        // Availability badge or button
+        // Availability badge or button - only show button when coach is online
         let bookingSection;
-        if (isAvailable) {
+        if (onlineStatus === true && isAvailable) {
+            // Coach is online and available - show Book button
             bookingSection = `<button id="${btnId}" class="rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-white text-sm font-semibold hover:from-purple-500 hover:to-pink-500">Book</button>`;
-        } else {
+        } else if (onlineStatus === true && !isAvailable) {
+            // Coach is online but busy - show next available time
             const nextAvailableText = availability.nextAvailableTime 
                 ? `Available: ${new Date(availability.nextAvailableTime).toLocaleString('en-US', { 
                     month: 'short', 
@@ -2001,6 +2055,9 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
                   })}`
                 : 'Currently Booked';
             bookingSection = `<span class="rounded-lg bg-gray-400 px-4 py-2 text-white text-sm font-semibold cursor-not-allowed" title="${availability.bookingInfo || 'Coach has an active booking'}">${nextAvailableText}</span>`;
+        } else {
+            // Coach is offline - don't show any button
+            bookingSection = '';
         }
         
         card.innerHTML = `
@@ -2023,7 +2080,8 @@ async function renderCoaches(items, userGoal, aiRecommendations = null) {
     `;
         coachList.appendChild(card);
         
-        if (isAvailable) {
+        // Only add click handler if coach is online and available
+        if (onlineStatus === true && isAvailable) {
             const btn = card.querySelector(`#${btnId}`);
             btn.addEventListener("click", async () => {
                 // Use the user's saved goal from profile, or the filtered goal
@@ -2182,6 +2240,100 @@ function renderBookings(items) {
             pastList.appendChild(row);
         }
     }
+    
+    // Start countdown timers for all visible bookings
+    startCountdownTimers();
+}
+
+// Countdown timer system
+let countdownIntervals = [];
+
+function startCountdownTimers() {
+    // Clear any existing intervals
+    countdownIntervals.forEach(interval => clearInterval(interval));
+    countdownIntervals = [];
+    
+    // Find all countdown timer elements
+    const timers = document.querySelectorAll('.countdown-timer');
+    
+    timers.forEach(timer => {
+        const scheduledTime = parseInt(timer.dataset.scheduled);
+        const bookingId = timer.dataset.bookingId;
+        const meetingLink = timer.dataset.meetingLink;
+        const textElement = timer.querySelector('.countdown-text');
+        
+        if (!textElement) return;
+        
+        // Update function
+        const updateCountdown = () => {
+            const now = Date.now();
+            const timeLeft = scheduledTime - now;
+            
+            if (timeLeft <= 0 || timeLeft <= (5 * 60 * 1000)) {
+                // Time to join! Convert to Join button
+                timer.outerHTML = `<button id="join-${bookingId}" data-meeting-link="${meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2 animate-pulse">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                    </svg>
+                    Join Session Now!
+                </button>`;
+                
+                // Add event listener to the new button
+                const joinBtn = document.getElementById(`join-${bookingId}`);
+                if (joinBtn) {
+                    joinBtn.addEventListener('click', async () => {
+                        joinBtn.disabled = true;
+                        joinBtn.innerHTML = 'Joining...';
+                        try {
+                            await updateDoc(doc(db, "bookings", bookingId), { 
+                                status: "active",
+                                joinedAt: serverTimestamp()
+                            });
+                            const roomName = meetingLink.split('/').pop().split('#')[0];
+                            startEmbeddedVideoCall(bookingId, roomName, 'Session', false);
+                        } catch (e) {
+                            console.error('Failed to join:', e);
+                            alert('Failed to join session: ' + e.message);
+                            joinBtn.disabled = false;
+                            joinBtn.innerHTML = 'Join Session Now!';
+                        }
+                    });
+                }
+                
+                // Stop this countdown
+                return true;
+            }
+            
+            // Calculate time components
+            const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+            const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+            
+            // Format countdown text
+            if (hours > 0) {
+                textElement.textContent = `Starts in ${hours}h ${minutes}m`;
+            } else if (minutes > 0) {
+                textElement.textContent = `Starts in ${minutes}m ${seconds}s`;
+            } else {
+                textElement.textContent = `Starts in ${seconds}s`;
+                timer.classList.add('animate-pulse');
+            }
+            
+            return false;
+        };
+        
+        // Update immediately
+        if (!updateCountdown()) {
+            // Set up interval to update every second
+            const interval = setInterval(() => {
+                if (updateCountdown()) {
+                    clearInterval(interval);
+                }
+            }, 1000);
+            
+            countdownIntervals.push(interval);
+        }
+    });
 }
 
 function createBookingCard(b, isActive) {
@@ -2214,6 +2366,8 @@ function createBookingCard(b, isActive) {
     const now = Date.now();
     const scheduledTime = b.scheduledAt?.toMillis?.() ?? now;
     const canJoinYet = (scheduledTime - now) <= (5 * 60 * 1000); // 5 minutes early grace period
+    const timeUntilSession = scheduledTime - now;
+    const showCountdown = (b.status === 'confirmed' || b.status === 'pending') && timeUntilSession > 0 && timeUntilSession < (24 * 60 * 60 * 1000); // Show countdown if within 24 hours
     
     // Show Join button if confirmed OR active OR reviewing (so both user and coach can join), has link, and time has arrived
     const showJoinButton = (b.status === 'confirmed' || b.status === 'active' || b.status === 'reviewing') && b.meetingLink && canJoinYet;
@@ -2222,14 +2376,27 @@ function createBookingCard(b, isActive) {
     const showEndButton = isActive && (b.status === "confirmed" || b.status === "reviewing" || b.status === "active") && canJoinYet;
     const showDeleteButton = !isActive && (b.status === "completed" || b.status === "cancelled");
     
+    // Handle coach display for broadcast bookings
+    const coachDisplay = b.coachName 
+        ? b.coachName 
+        : (b.isBroadcast && !b.coachId) 
+            ? '<span class="text-purple-600">⏳ Waiting for coach to accept...</span>' 
+            : (b.coachId || 'Unknown Coach');
+    
     row.innerHTML = `
       <div class="flex-1">
-        <p class="font-medium text-gray-900">${b.coachName ?? b.coachId}</p>
+        <p class="font-medium text-gray-900">${coachDisplay}</p>
         <p class="text-sm text-gray-600 mt-1">Goal: ${b.goal}</p>
         ${b.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1">⚡ Session in progress</p>' : `<p class="text-xs text-gray-600 mt-1">${new Date(b.scheduledAt?.toMillis?.() ?? Date.now()).toLocaleString()}</p>`}
       </div>
       <div class="flex items-center gap-3">
         ${statusBadges[b.status] || ''}
+        ${showCountdown ? `<div id="countdown-${b.id}" class="countdown-timer flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg text-white font-semibold text-sm" data-scheduled="${scheduledTime}" data-booking-id="${b.id}" data-meeting-link="${b.meetingLink || ''}">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span class="countdown-text">Calculating...</span>
+        </div>` : ''}
         ${showJoinButton ? `<button id="${joinBtnId}" data-meeting-link="${b.meetingLink}" class="rounded-lg bg-gradient-to-r from-emerald-600 to-blue-600 px-4 py-2 text-white text-xs font-semibold hover:from-emerald-500 hover:to-blue-500 inline-flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Join Session</button>` : ''}
         ${showEndButton ? `<button id="${endBtnId}" class="rounded-lg border border-blue-500/50 bg-blue-500/10 px-3 py-1.5 text-blue-400 text-xs font-medium hover:bg-blue-500/20">End Session</button>` : ""}
         ${showCancelButton ? `<button id="${cancelBtnId}" class="rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-1.5 text-red-400 text-xs font-medium hover:bg-red-500/20">Cancel</button>` : ""}
@@ -2377,18 +2544,33 @@ function setupCoachAvailabilityListener() {
         allBookingsListener();
     }
     
-    // Listen to all active bookings
+    // Listen to all bookings (including completed ones to detect when sessions end)
     const q = query(
         collection(db, "bookings"),
-        where("status", "in", ["pending", "confirmed", "reviewing", "active"])
+        orderBy("createdAt", "desc"),
+        limit(100)
     );
     
     allBookingsListener = onSnapshot(q, async (snapshot) => {
-        console.log('📡 Booking status changed, refreshing coach availability...');
+        // Check if any booking changed status to/from active states or completed
+        let shouldRefresh = false;
         
-        // Only refresh if we're currently showing coaches
-        if (coachSection && !coachSection.classList.contains('hidden')) {
-            await fetchCoachesForGoal(goalEl?.value || null);
+        snapshot.docChanges().forEach((change) => {
+            const booking = change.doc.data();
+            const relevantStatuses = ["pending", "confirmed", "reviewing", "active", "completed"];
+            
+            if (change.type === "modified" && relevantStatuses.includes(booking.status)) {
+                shouldRefresh = true;
+            }
+        });
+        
+        if (shouldRefresh) {
+            console.log('📡 Booking status changed, refreshing coach availability...');
+            
+            // Only refresh if we're currently showing coaches
+            if (coachSection && !coachSection.classList.contains('hidden')) {
+                await fetchCoachesForGoal(goalEl?.value || null);
+            }
         }
     }, (error) => {
         console.warn('All bookings listener error:', error);
@@ -3651,94 +3833,111 @@ async function createBooking(coachId, goal, scheduledAt) {
     if (!user) return;
     console.log('Creating booking for coachId:', coachId, 'goal:', goal, 'scheduledAt:', scheduledAt);
     
-    // Check if coach already has an active booking at this time
-    const now = new Date();
-    const bufferMinutes = 30; // Time buffer around bookings
+    // If coachId is null, this is a broadcast request to all coaches (for "book later")
+    const isBroadcastRequest = (coachId === null);
     
-    try {
-        console.log('🔍 Checking coach availability...');
+    if (isBroadcastRequest) {
+        console.log('📢 Creating BROADCAST booking request (no specific coach)');
+        // Skip availability check for broadcast requests
+        // Coaches will see this request and can accept if available
+    } else {
+        // Check if coach already has an active booking at this time
+        const now = new Date();
+        const bufferMinutes = 30; // Time buffer around bookings
         
-        // Query for existing bookings for this coach that are active/confirmed
-        const existingBookingsQuery = query(
-            collection(db, "bookings"),
-            where("coachId", "==", coachId),
-            where("status", "in", ["pending", "confirmed", "reviewing", "active"])
-        );
-        
-        const existingBookingsSnap = await getDocs(existingBookingsQuery);
-        console.log(`Found ${existingBookingsSnap.docs.length} existing bookings for coach`);
-        
-        // For immediate bookings, use current time. For scheduled, use provided time
-        const requestedTime = scheduledAt ? new Date(scheduledAt) : now;
-        const requestedStart = requestedTime.getTime();
-        const requestedEnd = requestedStart + (60 * 60 * 1000); // 1 hour sessions
-        const bufferMs = bufferMinutes * 60 * 1000;
-        
-        console.log(`📅 Requested booking time: ${requestedTime.toLocaleString()}`);
-        console.log(`📅 Session window: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
-        
-        for (const bookingDoc of existingBookingsSnap.docs) {
-            const booking = bookingDoc.data();
+        try {
+            console.log('🔍 Checking coach availability...');
             
-            // Handle serverTimestamp or regular timestamp
-            let bookingTime;
-            if (!booking.scheduledAt) {
-                // If no scheduledAt, assume it's an immediate booking created recently
-                bookingTime = booking.createdAt?.toDate ? booking.createdAt.toDate() : now;
-            } else if (booking.scheduledAt.toDate) {
-                bookingTime = booking.scheduledAt.toDate();
-            } else {
-                bookingTime = new Date(booking.scheduledAt);
-            }
-            
-            const bookingStart = bookingTime.getTime();
-            const bookingEnd = bookingStart + (60 * 60 * 1000); // 1 hour sessions
-            
-            console.log(`  🔍 Checking against booking ${bookingDoc.id}:`);
-            console.log(`     Existing: ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()} (${booking.status})`);
-            
-            // Check if there's a time conflict (with buffer)
-            const hasConflict = (
-                (requestedStart >= bookingStart - bufferMs && requestedStart < bookingEnd + bufferMs) ||
-                (requestedEnd > bookingStart - bufferMs && requestedEnd <= bookingEnd + bufferMs) ||
-                (requestedStart <= bookingStart && requestedEnd >= bookingEnd)
+            // Query for existing bookings for this coach that are active/confirmed
+            const existingBookingsQuery = query(
+                collection(db, "bookings"),
+                where("coachId", "==", coachId),
+                where("status", "in", ["pending", "confirmed", "reviewing", "active"])
             );
             
-            if (hasConflict) {
-                console.log('❌ TIME CONFLICT DETECTED!');
-                console.log(`   Requested: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
-                console.log(`   Existing:  ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()}`);
-                console.log(`   Overlap detected with booking ${bookingDoc.id}`);
+            const existingBookingsSnap = await getDocs(existingBookingsQuery);
+            console.log(`Found ${existingBookingsSnap.docs.length} existing bookings for coach`);
+            
+            // For immediate bookings, use current time. For scheduled, use provided time
+            const now = new Date();
+            const requestedTime = scheduledAt ? new Date(scheduledAt) : now;
+            const requestedStart = requestedTime.getTime();
+            const requestedEnd = requestedStart + (60 * 60 * 1000); // 1 hour sessions
+            const bufferMs = bufferMinutes * 60 * 1000;
+            
+            console.log(`📅 Requested booking time: ${requestedTime.toLocaleString()}`);
+            console.log(`📅 Session window: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
+            
+            for (const bookingDoc of existingBookingsSnap.docs) {
+                const booking = bookingDoc.data();
                 
-                const endTime = new Date(bookingEnd);
-                const endTimeStr = endTime.toLocaleString('en-US', { 
-                    hour: 'numeric', 
-                    minute: '2-digit',
-                    month: 'short',
-                    day: 'numeric'
-                });
+                // Handle serverTimestamp or regular timestamp
+                let bookingTime;
+                if (!booking.scheduledAt) {
+                    // If no scheduledAt, assume it's an immediate booking created recently
+                    bookingTime = booking.createdAt?.toDate ? booking.createdAt.toDate() : now;
+                } else if (booking.scheduledAt.toDate) {
+                    bookingTime = booking.scheduledAt.toDate();
+                } else {
+                    bookingTime = new Date(booking.scheduledAt);
+                }
                 
-                // Return null to indicate booking failed due to conflict
-                showToast(`This coach is currently busy and will be available after ${endTimeStr}. Please refresh the coach list.`, 'error');
-                return null;
+                const bookingStart = bookingTime.getTime();
+                const bookingEnd = bookingStart + (60 * 60 * 1000); // 1 hour sessions
+                
+                console.log(`  🔍 Checking against booking ${bookingDoc.id}:`);
+                console.log(`     Existing: ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()} (${booking.status})`);
+                
+                // Check if there's a time conflict (with buffer)
+                const hasConflict = (
+                    (requestedStart >= bookingStart - bufferMs && requestedStart < bookingEnd + bufferMs) ||
+                    (requestedEnd > bookingStart - bufferMs && requestedEnd <= bookingEnd + bufferMs) ||
+                    (requestedStart <= bookingStart && requestedEnd >= bookingEnd)
+                );
+                
+                if (hasConflict) {
+                    console.log('❌ TIME CONFLICT DETECTED!');
+                    console.log(`   Requested: ${requestedTime.toLocaleString()} - ${new Date(requestedEnd).toLocaleString()}`);
+                    console.log(`   Existing:  ${bookingTime.toLocaleString()} - ${new Date(bookingEnd).toLocaleString()}`);
+                    console.log(`   Overlap detected with booking ${bookingDoc.id}`);
+                    
+                    const endTime = new Date(bookingEnd);
+                    const endTimeStr = endTime.toLocaleString('en-US', { 
+                        hour: 'numeric', 
+                        minute: '2-digit',
+                        month: 'short',
+                        day: 'numeric'
+                    });
+                    
+                    // Return null to indicate booking failed due to conflict
+                    showToast(`This coach is currently busy and will be available after ${endTimeStr}. Please refresh the coach list.`, 'error');
+                    return null;
+                }
             }
-        }
         
-        console.log('✅ Coach is available for booking');
-    } catch (error) {
-        if (error.message.includes('already booked') || error.message.includes('busy')) {
-            return null; // Return null instead of throwing for availability conflicts
+            console.log('✅ Coach is available for booking');
+        } catch (error) {
+            if (error.message.includes('already booked') || error.message.includes('busy')) {
+                return null; // Return null instead of throwing for availability conflicts
+            }
+            console.warn('⚠️ Could not check availability (index may be missing), proceeding with booking:', error.message);
+            // Continue with booking if availability check fails due to index issues
         }
-        console.warn('⚠️ Could not check availability (index may be missing), proceeding with booking:', error.message);
-        // Continue with booking if availability check fails due to index issues
     }
     
-    const coachSnap = await getDoc(doc(db, "coaches", coachId)).catch(() => null);
-    const coachData = coachSnap?.exists?.() ? coachSnap.data() : null;
-    const coachName = coachData?.name ?? null;
-    const coachEmail = coachData?.email ?? null;
+    // Get coach data (skip for broadcast requests)
+    let coachName = null;
+    let coachEmail = null;
     
-    console.log('Coach data:', { coachName, coachEmail });
+    if (!isBroadcastRequest) {
+        const coachSnap = await getDoc(doc(db, "coaches", coachId)).catch(() => null);
+        const coachData = coachSnap?.exists?.() ? coachSnap.data() : null;
+        coachName = coachData?.name ?? null;
+        coachEmail = coachData?.email ?? null;
+        console.log('Coach data:', { coachName, coachEmail });
+    } else {
+        console.log('📢 Broadcast request - no specific coach');
+    }
     
     // Generate Jitsi Meet room (free, no API required)
     console.log('Using Jitsi Meet for video sessions');
@@ -3752,11 +3951,12 @@ async function createBooking(coachId, goal, scheduledAt) {
         userId: user.uid,
         userEmail: user.email,
         userName: user.displayName || user.email,
-        coachId,
-        coachEmail,
+        coachId: coachId, // null for broadcast requests
+        coachEmail: coachEmail, // null for broadcast requests
         goal,
         status: "pending", // Always start as pending
-        coachName,
+        coachName: coachName, // null for broadcast requests
+        isBroadcast: isBroadcastRequest, // Flag to indicate broadcast request
         scheduledAt: scheduledAt || serverTimestamp(),
         meetingId: meetingId,
         meetingLink: meetingLink,
@@ -3768,8 +3968,21 @@ async function createBooking(coachId, goal, scheduledAt) {
     const bookingRef = await addDoc(collection(db, "bookings"), bookingData);
     console.log('Booking created with ID:', bookingRef.id);
     
-    // Notify the coach about new booking request
-    if (coachEmail) {
+    // Notify coach(es) about new booking request
+    if (isBroadcastRequest) {
+        // Notify ALL coaches about broadcast request
+        console.log('📢 Notifying ALL coaches about broadcast request');
+        await notifyAllCoaches({
+            type: 'booking_request',
+            bookingId: bookingRef.id,
+            userName: user.displayName || user.email,
+            userEmail: user.email,
+            goal: goal,
+            scheduledAt: scheduledAt ? scheduledAt.toISOString() : 'Now',
+            timestamp: serverTimestamp()
+        });
+    } else if (coachEmail) {
+        // Notify specific coach
         await notifyCoach(coachEmail, {
             type: 'booking_request',
             bookingId: bookingRef.id,
@@ -3785,11 +3998,48 @@ async function createBooking(coachId, goal, scheduledAt) {
 }
 
 async function confirmBooking(bookingId, userEmail) {
+    const user = auth.currentUser;
+    if (!user) return;
+    
     const bookingRef = doc(db, "bookings", bookingId);
-    await updateDoc(bookingRef, { 
+    
+    // Check if this is a broadcast request that needs coach assignment
+    const bookingSnap = await getDoc(bookingRef);
+    if (!bookingSnap.exists()) {
+        throw new Error('Booking not found');
+    }
+    
+    const bookingData = bookingSnap.data();
+    const updateData = { 
         status: "confirmed",
         confirmedAt: serverTimestamp()
-    });
+    };
+    
+    // If this is a broadcast request (no coachId), assign the confirming coach
+    if (bookingData.isBroadcast && !bookingData.coachId) {
+        console.log('📢 Broadcast request - assigning coach:', user.uid);
+        
+        // Get coach data
+        const coachQuery = query(
+            collection(db, "coaches"),
+            where("email", "==", user.email)
+        );
+        const coachSnap = await getDocs(coachQuery);
+        
+        if (!coachSnap.empty) {
+            const coachDoc = coachSnap.docs[0];
+            const coachData = coachDoc.data();
+            
+            updateData.coachId = coachDoc.id;
+            updateData.coachName = coachData.name;
+            updateData.coachEmail = coachData.email;
+            updateData.isBroadcast = false; // No longer a broadcast request
+            
+            console.log('✅ Coach assigned:', coachData.name);
+        }
+    }
+    
+    await updateDoc(bookingRef, updateData);
     
     console.log('✅ Booking confirmed, will trigger notification to user via listener');
     
@@ -3824,15 +4074,67 @@ async function notifyCoach(coachEmail, notificationData) {
     }
 }
 
+async function notifyAllCoaches(notificationData) {
+    try {
+        console.log('📢 Creating broadcast notification for all coaches', notificationData);
+        
+        // Get all coaches
+        const coachesQuery = query(collection(db, "coaches"));
+        const coachesSnap = await getDocs(coachesQuery);
+        
+        console.log(`Found ${coachesSnap.docs.length} coaches to notify`);
+        
+        if (coachesSnap.docs.length === 0) {
+            console.warn('⚠️ No coaches found in database! Cannot send broadcast notifications.');
+            return;
+        }
+        
+        // Log coach emails for debugging
+        coachesSnap.docs.forEach(doc => {
+            const coach = doc.data();
+            console.log(`Coach: ${doc.id}, Email: ${coach.email || 'NO EMAIL'}`);
+        });
+        
+        // Create notification for each coach
+        const notificationPromises = coachesSnap.docs.map(async (coachDoc) => {
+            const coach = coachDoc.data();
+            if (coach.email) {
+                console.log(`Creating notification for coach: ${coach.email}`);
+                return addDoc(collection(db, "notifications"), {
+                    recipientEmail: coach.email,
+                    read: false,
+                    type: notificationData.type,
+                    bookingId: notificationData.bookingId,
+                    userName: notificationData.userName,
+                    goal: notificationData.goal,
+                    isBroadcast: true,
+                    timestamp: new Date()
+                });
+            } else {
+                console.warn(`Coach ${coachDoc.id} has no email, skipping notification`);
+                return Promise.resolve();
+            }
+        });
+        
+        await Promise.all(notificationPromises);
+        console.log(`✅ Broadcast notification sent to ${coachesSnap.docs.length} coaches`);
+    } catch (error) {
+        console.error('❌ Failed to notify all coaches:', error);
+        console.error('Error details:', error.message);
+    }
+}
+
 // ============================================
 // SESSION REMINDER SYSTEM
 // ============================================
 
 let sessionReminderInterval = null;
+let userSessionReminderInterval = null;
 const notifiedBookings = new Set(); // Track which bookings we've already notified about
+const notifiedUserBookings = new Set(); // Track user bookings notified
 
 /**
- * Start checking for upcoming sessions that need reminders
+ * Start checking for upcoming sessions that need reminders (FOR COACHES)
  * Checks every minute for sessions starting in 5 minutes
  */
 function startSessionReminderSystem() {
@@ -3853,6 +4155,27 @@ function startSessionReminderSystem() {
 }
 
 /**
+ * Start checking for upcoming sessions that need reminders (FOR USERS)
+ * Checks every minute for sessions starting in 5 minutes
+ */
+function startUserSessionReminderSystem() {
+    console.log('🔔 Starting session reminder system for user...');
+    
+    // Stop any existing interval
+    if (userSessionReminderInterval) {
+        clearInterval(userSessionReminderInterval);
+    }
+    
+    // Check immediately
+    checkUpcomingUserSessions();
+    
+    // Then check every minute
+    userSessionReminderInterval = setInterval(() => {
+        checkUpcomingUserSessions();
+    }, 60000); // Check every 60 seconds
+}
+
+/**
  * Stop the session reminder system
  */
 function stopSessionReminderSystem() {
@@ -3860,7 +4183,12 @@ function stopSessionReminderSystem() {
         clearInterval(sessionReminderInterval);
         sessionReminderInterval = null;
     }
+    if (userSessionReminderInterval) {
+        clearInterval(userSessionReminderInterval);
+        userSessionReminderInterval = null;
+    }
     notifiedBookings.clear();
+    notifiedUserBookings.clear();
     console.log('🔕 Session reminder system stopped');
 }
 
@@ -3930,6 +4258,9 @@ async function sendSessionReminder(booking, scheduledTime) {
     const userName = booking.userName || booking.userEmail || 'User';
     const goal = booking.goal || 'fitness';
     
+    // Show popup modal for joining session
+    showSessionJoinModal(booking, timeStr);
+    
     // Show browser notification with sound
     showNotificationWithSound(
         '⏰ Session Starting Soon!',
@@ -3993,6 +4324,127 @@ async function sendSessionReminder(booking, scheduledTime) {
     }
 }
 
+/**
+ * Check for user sessions starting in 5 minutes and send reminders
+ */
+async function checkUpcomingUserSessions() {
+    if (!currentUserId) return;
+    
+    try {
+        const now = new Date();
+        const user = auth.currentUser;
+        if (!user) return;
+        
+        // Query for confirmed bookings for this user
+        const upcomingQuery = query(
+            collection(db, "bookings"),
+            where("userId", "==", currentUserId),
+            where("status", "in", ["confirmed", "active"])
+        );
+        
+        const snapshot = await getDocs(upcomingQuery);
+        
+        snapshot.docs.forEach(doc => {
+            const booking = { id: doc.id, ...doc.data() };
+            
+            // Skip if already notified
+            if (notifiedUserBookings.has(booking.id)) {
+                return;
+            }
+            
+            // Get scheduled time
+            let scheduledTime;
+            if (booking.scheduledAt) {
+                scheduledTime = booking.scheduledAt.toDate ? booking.scheduledAt.toDate() : new Date(booking.scheduledAt);
+            } else {
+                return; // Skip if no scheduled time
+            }
+            
+            const timeUntilSession = scheduledTime.getTime() - now.getTime();
+            const minutesUntilSession = Math.floor(timeUntilSession / 60000);
+            
+            // If session starts in 4-6 minutes, send reminder
+            if (minutesUntilSession >= 4 && minutesUntilSession <= 6) {
+                console.log(`⏰ User session starting in ${minutesUntilSession} minutes! Sending reminder...`);
+                sendUserSessionReminder(booking, scheduledTime);
+                notifiedUserBookings.add(booking.id);
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error checking upcoming user sessions:', error);
+    }
+}
+
+/**
+ * Send reminder to user about upcoming session
+ * @param {Object} booking - The booking object
+ * @param {Date} scheduledTime - The scheduled time
+ */
+async function sendUserSessionReminder(booking, scheduledTime) {
+    const timeStr = scheduledTime.toLocaleTimeString('en-US', { 
+        hour: 'numeric', 
+        minute: '2-digit' 
+    });
+    
+    const coachName = booking.coachName || 'Coach';
+    const goal = booking.goal || 'fitness';
+    
+    // Show popup modal for joining session
+    showUserSessionJoinModal(booking, timeStr);
+    
+    // Show browser notification with sound
+    showNotificationWithSound(
+        '⏰ Session Starting Soon!',
+        `Your session with ${coachName} (${goal}) starts at ${timeStr}. Time to join!`,
+        'sessionReminder'
+    );
+}
+
+/**
+ * Show session join modal popup for users
+ */
+function showUserSessionJoinModal(booking, timeStr) {
+    if (!sessionJoinModal) return;
+    
+    pendingJoinBooking = booking;
+    
+    const coachName = booking.coachName || 'Coach';
+    const goal = booking.goal || 'fitness';
+    
+    // Update modal content
+    if (joinModalClientName) joinModalClientName.textContent = coachName;
+    if (joinModalGoal) joinModalGoal.textContent = goal;
+    if (joinModalTime) joinModalTime.textContent = timeStr;
+    
+    // Show modal
+    sessionJoinModal.classList.remove('hidden');
+    
+    console.log('📢 User session join modal displayed');
+}
+
+/**
+ * Show session join modal popup
+ */
+function showSessionJoinModal(booking, timeStr) {
+    if (!sessionJoinModal) return;
+    
+    pendingJoinBooking = booking;
+    
+    const userName = booking.userName || booking.userEmail || 'User';
+    const goal = booking.goal || 'fitness';
+    
+    // Update modal content
+    if (joinModalClientName) joinModalClientName.textContent = userName;
+    if (joinModalGoal) joinModalGoal.textContent = goal;
+    if (joinModalTime) joinModalTime.textContent = timeStr;
+    
+    // Show modal
+    sessionJoinModal.classList.remove('hidden');
+    
+    console.log('📢 Session join modal displayed');
+}
+
 // ============================================
 // END SESSION REMINDER SYSTEM
 // ============================================
@@ -4011,8 +4463,11 @@ async function fetchCoachBookings() {
     if (bookingsListener) {
         bookingsListener();
     }
+    if (broadcastBookingsListener) {
+        broadcastBookingsListener();
+    }
     
-    // Set up real-time listener for bookings
+    // Set up real-time listener for bookings assigned to this coach
     const q = query(
         collection(db, "bookings"),
         where("coachId", "==", currentCoachId),
@@ -4020,16 +4475,35 @@ async function fetchCoachBookings() {
         limit(50)
     );
     
-    console.log('Setting up real-time bookings listener for coachId:', currentCoachId);
+    // Set up separate listener for broadcast requests (coachId is null)
+    // Simplified query to avoid complex index requirements
+    const broadcastQuery = query(
+        collection(db, "bookings"),
+        where("isBroadcast", "==", true),
+        orderBy("createdAt", "desc"),
+        limit(20)
+    );
+    
+    console.log('Setting up real-time bookings listeners for coachId:', currentCoachId);
+    
+    let assignedBookings = [];
+    let broadcastBookings = [];
+    
+    const renderCombinedBookings = () => {
+        // Filter broadcast bookings to only show pending ones
+        const pendingBroadcasts = broadcastBookings.filter(b => b.status === 'pending');
+        const allBookings = [...assignedBookings, ...pendingBroadcasts];
+        renderCoachCalendar(allBookings);
+    };
     
     bookingsListener = onSnapshot(q, (snapshot) => {
-        console.log('Bookings snapshot received, total docs:', snapshot.docs.length);
-        const items = snapshot.docs.map(d => {
+        console.log('Assigned bookings snapshot received, total docs:', snapshot.docs.length);
+        assignedBookings = snapshot.docs.map(d => {
             const data = { id: d.id, ...d.data() };
             console.log('Booking item:', data);
             return data;
         });
-        renderCoachCalendar(items);
+        renderCombinedBookings();
         
         // Check for new pending bookings (sound notification for coach)
         snapshot.docChanges().forEach(change => {
@@ -4046,6 +4520,41 @@ async function fetchCoachBookings() {
         });
     }, (error) => {
         console.error('Bookings listener error:', error);
+    });
+    
+    // Listen for broadcast requests
+    broadcastBookingsListener = onSnapshot(broadcastQuery, (snapshot) => {
+        console.log('📢 Broadcast bookings snapshot received, total docs:', snapshot.docs.length);
+        broadcastBookings = snapshot.docs.map(d => {
+            const data = { id: d.id, ...d.data() };
+            console.log('Broadcast booking item:', data);
+            return data;
+        });
+        renderCombinedBookings();
+        
+        // Notify about new broadcast requests
+        snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+                const booking = { id: change.doc.id, ...change.doc.data() };
+                if (booking.status === 'pending' && booking.isBroadcast) {
+                    showNotificationWithSound(
+                        '📢 New Open Request!',
+                        `${booking.userName || booking.userEmail} is looking for a ${booking.goal} coach`,
+                        'newBooking'
+                    );
+                }
+            }
+        });
+    }, (error) => {
+        console.error('❌ Broadcast bookings listener error:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        
+        // If it's an index error, show a helpful message
+        if (error.code === 'failed-precondition' || error.message.includes('index')) {
+            console.error('⚠️ Firestore index required. Please create the index or check Firestore rules.');
+            console.error('Query: bookings collection, where isBroadcast==true, orderBy createdAt desc');
+        }
     });
 }
 
@@ -4319,14 +4828,21 @@ function createCoachBookingCard(booking, category) {
     const showEndButton = category !== 'past' && (booking.status === 'confirmed' || booking.status === 'reviewing' || booking.status === 'active') && canJoinYet;
     const showDeleteButton = category === 'past' && (booking.status === 'completed' || booking.status === 'cancelled');
     
+    // Add broadcast indicator
+    const broadcastBadge = booking.isBroadcast 
+        ? '<span class="inline-block px-2 py-1 rounded text-xs bg-purple-500/20 text-purple-600 border border-purple-500/30 animate-pulse">📢 Open Request</span>'
+        : '';
+    
     card.innerHTML = `
         <div class="flex items-start justify-between gap-4">
             <div class="flex-1">
-                <div class="flex items-center gap-2 mb-1">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
                     <p class="font-semibold text-gray-800">${booking.userName || booking.userEmail || 'User'}</p>
+                    ${broadcastBadge}
                     ${statusBadges[booking.status] || ''}
                 </div>
                 <p class="text-sm text-gray-600">Goal: <span class="font-medium">${booking.goal}</span></p>
+                ${booking.isBroadcast ? '<p class="text-xs text-purple-600 mt-1 italic">🌐 This request was sent to all coaches</p>' : ''}
                 ${booking.status === 'active' ? '<p class="text-xs text-emerald-600 mt-1 font-semibold">⚡ Session in progress</p>' : dateTimeDisplay}
             </div>
             <div class="flex flex-col items-end gap-2">
@@ -4461,32 +4977,12 @@ async function endSession(bookingId) {
 }
 
 // Modal event handlers
-bookingNowBtn.addEventListener("click", () => {
-    isBookingNow = true;
-    bookingDatetimeContainer.classList.add("hidden");
-    bookingDatetimeError.classList.add("hidden");
-    
-    // Update button styles
-    bookingNowBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
-    bookingLaterBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
-});
-
-bookingLaterBtn.addEventListener("click", () => {
-    isBookingNow = false;
-    bookingDatetimeContainer.classList.remove("hidden");
-    bookingDatetimeError.classList.add("hidden");
-    
-    // Update button styles
-    bookingNowBtn.className = "flex-1 rounded-md border-2 border-gray-300 bg-white dark:bg-gray-900 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800";
-    bookingLaterBtn.className = "flex-1 rounded-md border-2 border-brand-500 bg-brand-50 dark:bg-brand-950 px-4 py-3 text-sm font-medium text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900";
-});
-
 bookingCancelBtn.addEventListener("click", () => {
     closeBookingModal();
 });
 
 bookingConfirmBtn.addEventListener("click", async () => {
-    console.log('Confirm clicked, pendingBookingCoach:', pendingBookingCoach, 'pendingBookingGoal:', pendingBookingGoal, 'isBookingNow:', isBookingNow);
+    console.log('Immediate booking confirm clicked, pendingBookingCoach:', pendingBookingCoach, 'pendingBookingGoal:', pendingBookingGoal);
     
     if (!pendingBookingCoach || !pendingBookingGoal) {
         console.error('Missing coach or goal data');
@@ -4494,65 +4990,78 @@ bookingConfirmBtn.addEventListener("click", async () => {
         return;
     }
     
-    if (isBookingNow) {
-        // Start session now
-        bookingConfirmBtn.disabled = true;
-        bookingConfirmBtn.textContent = 'Requesting...';
-        try {
-            console.log('Creating immediate booking...');
-            // Pass current time instead of null for proper availability checking
-            const result = await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date());
-            if (result === null) {
-                // Booking failed due to availability conflict
-                closeBookingModal();
-                await fetchBookings();
-                return;
-            }
+    bookingConfirmBtn.disabled = true;
+    bookingConfirmBtn.textContent = 'Requesting...';
+    try {
+        console.log('Creating immediate booking with specific coach...');
+        const result = await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date());
+        if (result === null) {
             closeBookingModal();
-            alert('Booking request sent! Waiting for coach confirmation. You will be notified when the coach accepts.');
             await fetchBookings();
-            // Trigger coach list refresh after a short delay to ensure Firestore has updated
-            setTimeout(() => {
-                if (goalEl && goalEl.value) {
-                    fetchCoachesForGoal(goalEl.value);
-                }
-            }, 1000);
-        } catch (e) {
-            console.error('Booking error:', e);
-            alert('Failed to create booking: ' + e.message);
-        } finally {
-            bookingConfirmBtn.disabled = false;
-            bookingConfirmBtn.textContent = 'Confirm';
-        }
-    } else {
-        // Book for later
-        const value = bookingDatetime.value;
-        const selectedMs = value ? Date.parse(value) : NaN;
-        if (!selectedMs || Number.isNaN(selectedMs) || selectedMs < Date.now()) {
-            bookingDatetimeError.classList.remove("hidden");
             return;
         }
-        bookingConfirmBtn.disabled = true;
-        bookingConfirmBtn.textContent = 'Requesting...';
-        try {
-            console.log('Creating scheduled booking...');
-            const result = await createBooking(pendingBookingCoach.id, pendingBookingGoal, new Date(selectedMs));
-            if (result === null) {
-                // Booking failed due to availability conflict
-                closeBookingModal();
-                await fetchBookings();
-                return;
+        closeBookingModal();
+        alert('Booking request sent! Waiting for coach confirmation. You will be notified when the coach accepts.');
+        await fetchBookings();
+        setTimeout(() => {
+            if (goalEl && goalEl.value) {
+                fetchCoachesForGoal(goalEl.value);
             }
-            closeBookingModal();
-            alert('Booking request sent! Waiting for coach confirmation. You will be notified when the coach accepts.');
+        }, 1000);
+    } catch (e) {
+        console.error('Booking error:', e);
+        alert('Failed to create booking: ' + e.message);
+    } finally {
+        bookingConfirmBtn.disabled = false;
+        bookingConfirmBtn.textContent = '✓ Confirm';
+    }
+});
+
+// Schedule Ahead Modal handlers
+btnScheduleAhead?.addEventListener("click", () => {
+    openScheduleAheadModal();
+});
+
+scheduleCancelBtn.addEventListener("click", () => {
+    closeScheduleAheadModal();
+});
+
+scheduleConfirmBtn.addEventListener("click", async () => {
+    const goal = scheduleGoal.value;
+    const datetimeValue = scheduleDatetime.value;
+    
+    if (!goal) {
+        alert('Please select a fitness goal.');
+        return;
+    }
+    
+    const selectedMs = datetimeValue ? Date.parse(datetimeValue) : NaN;
+    if (!selectedMs || Number.isNaN(selectedMs) || selectedMs < Date.now()) {
+        scheduleDatetimeError.classList.remove("hidden");
+        return;
+    }
+    
+    scheduleDatetimeError.classList.add("hidden");
+    scheduleConfirmBtn.disabled = true;
+    scheduleConfirmBtn.textContent = 'Sending to all coaches...';
+    
+    try {
+        console.log('Creating broadcast booking request (no specific coach)...');
+        const result = await createBooking(null, goal, new Date(selectedMs));
+        if (result === null) {
+            closeScheduleAheadModal();
             await fetchBookings();
-        } catch (e) {
-            console.error('Booking error:', e);
-            alert('Failed to create booking: ' + e.message);
-        } finally {
-            bookingConfirmBtn.disabled = false;
-            bookingConfirmBtn.textContent = 'Confirm';
+            return;
         }
+        closeScheduleAheadModal();
+        alert('Your request has been sent to all coaches! You will be notified when a coach accepts.');
+        await fetchBookings();
+    } catch (e) {
+        console.error('Booking error:', e);
+        alert('Failed to create booking: ' + e.message);
+    } finally {
+        scheduleConfirmBtn.disabled = false;
+        scheduleConfirmBtn.textContent = '📢 Send Request';
     }
 });
 
@@ -6011,26 +6520,20 @@ function startPresenceTracking() {
     // Set initial online status
     updatePresence(true);
     
-    // Send heartbeat every 30 seconds
+    // Send heartbeat every 30 seconds to keep coach online
     presenceHeartbeat = setInterval(() => {
         updatePresence(true);
     }, ONLINE_PRESENCE_INTERVAL);
     
-    // Set offline on page unload
+    // Set offline only on page close/browser close
     window.addEventListener('beforeunload', () => {
         updatePresence(false);
     });
     
-    // Handle visibility changes (tab switching, etc.)
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            updatePresence(false);
-        } else {
-            updatePresence(true);
-        }
-    });
+    // Note: Removed visibility change handler - coach stays online when logged in,
+    // even if they switch tabs or minimize the window
     
-    console.log('🟢 Coach presence tracking started');
+    console.log('🟢 Coach presence tracking started (stays online while logged in)');
 }
 
 function stopPresenceTracking() {
@@ -6125,7 +6628,7 @@ function getLastSeenText(lastSeen) {
 // Notification sounds for booking events
 const notificationSounds = {
     newBooking: () => {
-        // Create notification sound for new booking (coach)
+        // Soft, professional notification tone for new booking
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
@@ -6133,67 +6636,72 @@ const notificationSounds = {
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
-        // Pleasant chime sound for new booking
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(1000, audioContext.currentTime + 0.1);
-        oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.3);
+        // Soft sine wave - gentle and professional
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(587.33, audioContext.currentTime); // D5 - pleasant tone
+        oscillator.frequency.exponentialRampToValueAtTime(698.46, audioContext.currentTime + 0.15); // F5
         
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.5);
-        
-        console.log('🔔 New booking notification sound played');
-    },
-    
-    bookingConfirmed: () => {
-        // Create success sound for booking confirmation (user)
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        // Success ding sound for booking confirmation
-        oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
-        oscillator.frequency.setValueAtTime(659.25, audioContext.currentTime + 0.1); // E5
-        oscillator.frequency.setValueAtTime(783.99, audioContext.currentTime + 0.2); // G5
-        
-        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        // Very gentle volume envelope
+        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.05); // Softer volume
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
         
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.4);
         
-        console.log('✅ Booking confirmed notification sound played');
+        console.log('🔔 New booking notification sound played');
     },
     
-    sessionReminder: () => {
-        // Create urgent reminder sound for sessions starting soon
+    bookingConfirmed: () => {
+        // Elegant success chime for booking confirmation
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         
-        // Create three beeps for urgency
-        for (let i = 0; i < 3; i++) {
+        // Two-note ascending chime
+        [523.25, 659.25].forEach((freq, i) => {
             const oscillator = audioContext.createOscillator();
             const gainNode = audioContext.createGain();
             
             oscillator.connect(gainNode);
             gainNode.connect(audioContext.destination);
             
-            // Urgent beep sound
-            oscillator.frequency.setValueAtTime(880, audioContext.currentTime + (i * 0.3)); // A5
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(freq, audioContext.currentTime + (i * 0.12));
             
-            gainNode.gain.setValueAtTime(0, audioContext.currentTime + (i * 0.3));
-            gainNode.gain.linearRampToValueAtTime(0.4, audioContext.currentTime + (i * 0.3) + 0.05);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + (i * 0.3) + 0.2);
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime + (i * 0.12));
+            gainNode.gain.linearRampToValueAtTime(0.12, audioContext.currentTime + (i * 0.12) + 0.03);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + (i * 0.12) + 0.3);
             
-            oscillator.start(audioContext.currentTime + (i * 0.3));
-            oscillator.stop(audioContext.currentTime + (i * 0.3) + 0.2);
-        }
+            oscillator.start(audioContext.currentTime + (i * 0.12));
+            oscillator.stop(audioContext.currentTime + (i * 0.12) + 0.3);
+        });
         
-        console.log('⏰ Session reminder sound played (3 beeps)');
+        console.log('✅ Booking confirmed notification sound played');
+    },
+    
+    sessionReminder: () => {
+        // Professional two-tone reminder (like smartphone notifications)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Two gentle tones
+        [783.99, 659.25].forEach((freq, i) => {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(freq, audioContext.currentTime + (i * 0.25));
+            
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime + (i * 0.25));
+            gainNode.gain.linearRampToValueAtTime(0.18, audioContext.currentTime + (i * 0.25) + 0.04);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + (i * 0.25) + 0.25);
+            
+            oscillator.start(audioContext.currentTime + (i * 0.25));
+            oscillator.stop(audioContext.currentTime + (i * 0.25) + 0.25);
+        });
+        
+        console.log('⏰ Session reminder sound played (2 tones)');
     }
 };
 
@@ -6545,6 +7053,7 @@ onAuthStateChanged(auth, async (user) => {
             await loadUserProfile(user.uid);
             startCoachPresenceListener(); // Start listening to coach presence for users
             setupCoachAvailabilityListener(); // Start listening to bookings for coach availability
+            startUserSessionReminderSystem(); // Start checking for upcoming user sessions
             // Load ALL coaches for users to see
             await Promise.all([
                 fetchWorkoutsForGoal(goalEl.value),
@@ -6587,6 +7096,10 @@ onAuthStateChanged(auth, async (user) => {
             allBookingsListener();
             allBookingsListener = null;
         }
+        if (broadcastBookingsListener) {
+            broadcastBookingsListener();
+            broadcastBookingsListener = null;
+        }
     }
 });
 // ============================================
@@ -6626,6 +7139,9 @@ function switchTab(activeTabId) {
         }
     });
 }
+
+// Initialize with Coaches tab active
+switchTab('tab-coaches');
 
 // ============================================
 // TAB NAVIGATION FOR COACH PAGE

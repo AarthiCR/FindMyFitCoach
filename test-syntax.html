@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Syntax Test</title>
+</head>
+<body>
+    <h1>Check Console for Errors</h1>
+    <script type="module">
+        try {
+            import('./src/js/main.js').then(() => {
+                console.log('✅ main.js loaded successfully');
+            }).catch(error => {
+                console.error('❌ Error loading main.js:', error);
+            });
+        } catch (error) {
+            console.error('❌ Syntax error:', error);
+        }
+    </script>
+</body>
+</html>
