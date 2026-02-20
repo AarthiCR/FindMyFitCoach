@@ -1,0 +1,13 @@
+{
+  "name": "findmyfitcoach",
+  "version": "1.0.0",
+  "description": "FindMyFitCoach - AI-powered fitness coaching platform",
+  "scripts": {
+    "test": "jest",
+    "test:verbose": "jest --verbose",
+    "test:watch": "jest --watchAll"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
